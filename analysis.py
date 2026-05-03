@@ -702,21 +702,33 @@ class PolarizationGUI(tk.Tk):
         if self.pol_params:
             S, pol_vect = self.pol_params
             DoLP, AoLP = pol_vect
+            pol_type = self.pol_var.get()
             fig, ax = plt.subplots()
-            im = ax.imshow(DoLP, cmap='viridis')
-            ax.set_title('Degree of Linear Polarization (DoLP)')
+            if pol_type == "circular":
+                im = ax.imshow(DoLP, cmap='RdBu', vmin=-1, vmax=1)
+                ax.set_title('Degree of Circular Polarization (DoCP)')
+                ax.set_xlabel('DoCP')
+            else:
+                im = ax.imshow(DoLP, cmap='viridis')
+                ax.set_title('Degree of Linear Polarization (DoLP)')
+                ax.set_xlabel('DoLP')
             plt.colorbar(im, ax=ax)
-            self.show_plot_window(fig, "DoLP Map")
+            self.show_plot_window(fig, "Polarization Magnitude Map")
         else:
             self.status_label.config(text="Calculate polarization first.")
 
     def plot_aolp(self):
         if self.pol_params:
+            pol_type = self.pol_var.get()
+            if pol_type == "circular":
+                self.status_label.config(text="Circular polarization has no meaningful AoLP map.")
+                return
             S, pol_vect = self.pol_params
             DoLP, AoLP = pol_vect
             fig, ax = plt.subplots()
             im = ax.imshow(AoLP, cmap='hsv')
             ax.set_title('Angle of Linear Polarization (AoLP)')
+            ax.set_xlabel('AoLP (radians)')
             plt.colorbar(im, ax=ax)
             self.show_plot_window(fig, "AoLP Map")
         else:
@@ -726,12 +738,17 @@ class PolarizationGUI(tk.Tk):
         if self.pol_params:
             S, pol_vect = self.pol_params
             DoLP, AoLP = pol_vect
+            pol_type = self.pol_var.get()
             fig, ax = plt.subplots()
             ax.hist(DoLP.flatten(), bins=50, alpha=0.7)
-            ax.set_title('DoLP Histogram')
-            ax.set_xlabel('DoLP')
+            if pol_type == "circular":
+                ax.set_title('DoCP Histogram')
+                ax.set_xlabel('DoCP')
+            else:
+                ax.set_title('DoLP Histogram')
+                ax.set_xlabel('DoLP')
             ax.set_ylabel('Frequency')
-            self.show_plot_window(fig, "DoLP Histogram")
+            self.show_plot_window(fig, "Polarization Histogram")
         else:
             self.status_label.config(text="Calculate polarization first.")
 
@@ -789,13 +806,13 @@ class PolarizationGUI(tk.Tk):
                 h_img, w_img = self.img.shape[:2]
                 c_bounds = [x / w_img, (x + w) / w_img, y / h_img, (y + h) / h_img]
             
-            pol_type = self.pol_var.get()
-            if pol_type == "linear":
+            self.pol_type = self.pol_var.get()
+            if self.pol_type == "linear":
                 self.pol_params = img_to_AoI_to_linear_pol_params_pipeline(self.img, c_bounds)
-            elif pol_type == "circular":
+            elif self.pol_type == "circular":
                 self.pol_params = img_to_AoI_to_circular_pol_params_pipeline(self.img, c_bounds)
             
-            self.status_label.config(text=f"Polarization calculated for {pol_type}.")
+            self.status_label.config(text=f"Polarization calculated for {self.pol_type}.")
         else:
             self.status_label.config(text="Load an image first.")
 
