@@ -8,6 +8,11 @@ import warnings
 import pickle
 from time import time
 from matplotlib import pyplot as plt
+import tkinter as tk
+from PIL import Image, ImageTk
+from tkinter import filedialog
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 # try: # if running as a script
 #     import helper_functions as hf
@@ -41,12 +46,23 @@ def main():
     if not os.path.exists(root): os.makedirs(root)
     
     # img = cv2.imread(next(filter(lambda x: x.endswith('.png'), os.listdir('./Tests/the_mask/images'))), cv2.IMREAD_GRAYSCALE)
-    img = cv2.imread(f"./Tests/the_mask/images/{os.listdir('./Tests/the_mask/images')[0]}", cv2.IMREAD_GRAYSCALE)
+    img = cv2.imread(f"./Tests/{os.listdir('./Tests/')[0]}", cv2.IMREAD_GRAYSCALE)
        
     pol_params = img_to_AoI_to_linear_pol_params_pipeline(img) # also isolates the area of interest for the polarisation analysis
-    XoLP_to_HSV_export(img, f"{root}/test_hsv")
+    XoLP_to_HSV_export(pol_params[1], f"{root}/test_hsv")
     # pol_export(f'{root}/test_pol_data', polvect) # one of these was like 57MB
-    pol_summary_export(f'{root}/test_pol_summary', pol_params[1], [30, 180, 60]) # dummy values for azimuth, zenith, camera zenith
+    
+    # get saturation percentages
+    img_AoI = hf.crop_to_proportions(img, gvars.AoI_bounds) # <== for saturation analysis only (looking at unsplit image)
+    oversat, undersat = hf.sat_pct(img_AoI)
+    
+    # superpixel averages
+    DoLP_SP_avg, AoLP_SP_avg = XoLP_superpixel_avg_from_img(img)
+    
+    # dummy file params
+    file_params = {'az': 30, 'ze': 180, 'cze': 60, 'exp': 100, 'ISO': 100, 'obs': False}
+    
+    pol_summary_export(f'{root}/test_pol_summary', pol_params, file_params, oversat, undersat, DoLP_SP_avg=DoLP_SP_avg, AoLP_SP_avg=AoLP_SP_avg) # dummy values for azimuth, zenith, camera zenith
 
 #%% HIGH LEVEL FUNCTIONS
 def linear_polarisation_analysis(test_name, img, testdir, hdir, paramstr):
@@ -149,8 +165,28 @@ def circular_polarisation_analysis(test_name, img, testdir, cdir, paramstr):
     CPI_AoI = cv2.resize(CPI_AoI, (img_preview.shape[1], img_preview.shape[0])) # resize the CPI image to match the raw image
     return np.hstack([img_preview, CPI_AoI])
 
+def display_demosaiced_images(img):
+    '''Demosaic the image into 4 images at each angle and display in a 2x2 window'''
+    pol_angles = hf.pol_split(img)
+    # Assume 4 angles: 0, 45, 90, 135
+    # Normalize for display
+    pol_angles_norm = [(angle / 255.0 * 255).astype(np.uint8) for angle in pol_angles]
+    # Create 2x2 grid
+    top_row = np.hstack([pol_angles_norm[0], pol_angles_norm[1]])
+    bottom_row = np.hstack([pol_angles_norm[2], pol_angles_norm[3]])
+    combined = np.vstack([top_row, bottom_row])
+    # Resize to fit screen, say max 1200x800
+    h, w = combined.shape[:2]
+    scale = min(1200 / w, 800 / h)
+    if scale < 1:
+        new_w, new_h = int(w * scale), int(h * scale)
+        combined = cv2.resize(combined, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+    cv2.imshow('Demosaiced Images (0, 45, 90, 135)', combined)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
 #%% LINEAR POLARISATION ANALYSIS FUNCTIONS
-def img_to_AoI_to_linear_pol_params_pipeline(img):
+def img_to_AoI_to_linear_pol_params_pipeline(img, c_bounds=None):
     '''Calculate polarisation parameters from an image (isolating a region of interest)
     inputs:
         img: 1 channel polarsens image to analyse (dtype=uint8) (see: polarsens_to_cropped_pol_angles function)
@@ -161,7 +197,7 @@ def img_to_AoI_to_linear_pol_params_pipeline(img):
         stokes parameters [I, Q, U, V]: intensity, linear polarisation (0-90), linear polarisation(45-135), circular polarisation (dtype=float)
         pol_vector [DoP, AoP]: degree of polarisation, angle of polarisation (dtype=float)
     '''
-    pol_img_AoI = polarsens_to_cropped_pol_angles(img)
+    pol_img_AoI = polarsens_to_cropped_pol_angles(img, c_bounds)
     S_lin = stokes_linear(pol_img_AoI) # Stokes parameters
     polvect_lin = XoLP(S_lin) # Degree and Angle of Polarisation (the * unpacks the list into arguments)
 
@@ -249,8 +285,8 @@ def XoLP_cam_normalise(XoLP_img):
     return [DoLP, AoLP]
 
 #%% CIRCULAR POLARISATION ANALYSIS FUNCTIONS
-def img_to_AoI_to_circular_pol_params_pipeline(img): 
-    pol_img_AoI = polarsens_to_cropped_pol_angles(img)
+def img_to_AoI_to_circular_pol_params_pipeline(img, c_bounds=None): 
+    pol_img_AoI = polarsens_to_cropped_pol_angles(img, c_bounds)
     
     # Calculate V (or S_3) given the 45 degree intensity behind a quarter waveplate
     S_circ = stokes_circular(pol_img_AoI) # Q (S[1]) and U (S[2]) are 0
@@ -555,8 +591,243 @@ def polarsens_to_cropped_pol_angles(img, c_bounds=None, mask=True, mask_limits=(
 
     # TODO: do the cropping at the camera level, rather than here (see Happy Snaps for why)
 
+class PolarizationGUI(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Polarization Analysis GUI")
+        self.geometry("800x600")
+
+        # Variables
+        self.img = None
+        self.roi = None
+        self.pol_params = None
+        self.pol_type = "linear"  # or "circular"
+        self.roi_start = None
+        self.roi_rect = None
+        self.selecting_roi = False
+
+        # Buttons
+        self.load_btn = tk.Button(self, text="Load Image", command=self.load_image)
+        self.load_btn.pack(pady=5)
+
+        self.display_demosaic_btn = tk.Button(self, text="Display Demosaiced", command=self.display_demosaic)
+        self.display_demosaic_btn.pack(pady=5)
+
+        self.select_roi_btn = tk.Button(self, text="Select ROI on Canvas", command=self.toggle_roi_selection)
+        self.select_roi_btn.pack(pady=5)
+
+        # Radio buttons for pol type
+        self.pol_var = tk.StringVar(value="linear")
+        tk.Radiobutton(self, text="Linear Polarization", variable=self.pol_var, value="linear").pack()
+        tk.Radiobutton(self, text="Circular Polarization", variable=self.pol_var, value="circular").pack()
+
+        self.calculate_btn = tk.Button(self, text="Calculate Polarization", command=self.calculate)
+        self.calculate_btn.pack(pady=5)
+
+        # Analysis buttons
+        self.plot_dolp_btn = tk.Button(self, text="Plot DoLP Map", command=self.plot_dolp)
+        self.plot_dolp_btn.pack(pady=2)
+
+        self.plot_aolp_btn = tk.Button(self, text="Plot AoLP Map", command=self.plot_aolp)
+        self.plot_aolp_btn.pack(pady=2)
+
+        self.plot_hist_btn = tk.Button(self, text="Plot DoLP Histogram", command=self.plot_dolp_hist)
+        self.plot_hist_btn.pack(pady=2)
+
+        self.export_csv_btn = tk.Button(self, text="Export to CSV", command=self.export_csv)
+        self.export_csv_btn.pack(pady=5)
+
+        # Image display canvas
+        self.canvas = tk.Canvas(self)
+        self.canvas.pack(fill=tk.BOTH, expand=True, pady=10)
+        self.canvas.bind('<Configure>', lambda event: self.resize_image())
+        self.canvas.bind('<ButtonPress-1>', self.on_mouse_press)
+        self.canvas.bind('<B1-Motion>', self.on_mouse_drag)
+        self.canvas.bind('<ButtonRelease-1>', self.on_mouse_release)
+
+        # Status label
+        self.status_label = tk.Label(self, text="Load an image to start")
+        self.status_label.pack(pady=5)
+
+    def load_image(self):
+        file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.png *.jpg *.jpeg *.bmp")])
+        if file_path:
+            self.img = cv2.imread(file_path, cv2.IMREAD_GRAYSCALE)  # Assume grayscale polarsens
+            if self.img is not None:
+                # Store original PIL image
+                self.original_img = Image.fromarray(self.img)
+                self.resize_image()
+                self.status_label.config(text="Image loaded. Select ROI or calculate.")
+            else:
+                self.status_label.config(text="Failed to load image.")
+
+    def on_mouse_press(self, event):
+        if self.selecting_roi and hasattr(self, 'original_img'):
+            self.roi_start = (event.x, event.y)
+            if self.roi_rect:
+                self.canvas.delete(self.roi_rect)
+
+    def on_mouse_drag(self, event):
+        if self.selecting_roi and self.roi_start:
+            if self.roi_rect:
+                self.canvas.delete(self.roi_rect)
+            x1, y1 = self.roi_start
+            x2, y2 = event.x, event.y
+            self.roi_rect = self.canvas.create_rectangle(x1, y1, x2, y2, outline='red', width=2)
+
+    def on_mouse_release(self, event):
+        if self.selecting_roi and self.roi_start:
+            x1, y1 = self.roi_start
+            x2, y2 = event.x, event.y
+            # Convert to image coordinates
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+            img_width, img_height = self.original_img.size
+            scale = min(canvas_width / img_width, canvas_height / img_height)
+            new_width = int(img_width * scale)
+            new_height = int(img_height * scale)
+            x_offset = (canvas_width - new_width) // 2
+            y_offset = (canvas_height - new_height) // 2
+            # ROI in scaled image
+            roi_x1 = max(0, (x1 - x_offset) / scale)
+            roi_y1 = max(0, (y1 - y_offset) / scale)
+            roi_x2 = min(img_width, (x2 - x_offset) / scale)
+            roi_y2 = min(img_height, (y2 - y_offset) / scale)
+            self.roi = (roi_x1, roi_y1, roi_x2 - roi_x1, roi_y2 - roi_y1)
+            self.status_label.config(text=f"ROI selected: {self.roi}")
+            self.selecting_roi = False
+            self.canvas.config(cursor="")
+
+    def plot_dolp(self):
+        if self.pol_params:
+            S, pol_vect = self.pol_params
+            DoLP, AoLP = pol_vect
+            fig, ax = plt.subplots()
+            im = ax.imshow(DoLP, cmap='viridis')
+            ax.set_title('Degree of Linear Polarization (DoLP)')
+            plt.colorbar(im, ax=ax)
+            self.show_plot_window(fig, "DoLP Map")
+        else:
+            self.status_label.config(text="Calculate polarization first.")
+
+    def plot_aolp(self):
+        if self.pol_params:
+            S, pol_vect = self.pol_params
+            DoLP, AoLP = pol_vect
+            fig, ax = plt.subplots()
+            im = ax.imshow(AoLP, cmap='hsv')
+            ax.set_title('Angle of Linear Polarization (AoLP)')
+            plt.colorbar(im, ax=ax)
+            self.show_plot_window(fig, "AoLP Map")
+        else:
+            self.status_label.config(text="Calculate polarization first.")
+
+    def plot_dolp_hist(self):
+        if self.pol_params:
+            S, pol_vect = self.pol_params
+            DoLP, AoLP = pol_vect
+            fig, ax = plt.subplots()
+            ax.hist(DoLP.flatten(), bins=50, alpha=0.7)
+            ax.set_title('DoLP Histogram')
+            ax.set_xlabel('DoLP')
+            ax.set_ylabel('Frequency')
+            self.show_plot_window(fig, "DoLP Histogram")
+        else:
+            self.status_label.config(text="Calculate polarization first.")
+
+    def show_plot_window(self, fig, title):
+        window = tk.Toplevel(self)
+        window.title(title)
+        canvas = FigureCanvasTkAgg(fig, master=window)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+    def resize_image(self):
+        if hasattr(self, 'original_img') and self.original_img:
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+            if canvas_width > 1 and canvas_height > 1:
+                img_width, img_height = self.original_img.size
+                scale = min(canvas_width / img_width, canvas_height / img_height)
+                new_width = int(img_width * scale)
+                new_height = int(img_height * scale)
+                resized_img = self.original_img.resize((new_width, new_height), Image.LANCZOS)
+                self.img_tk = ImageTk.PhotoImage(resized_img)
+                # Clear canvas and redraw centered
+                self.canvas.delete("all")
+                x_offset = (canvas_width - new_width) // 2
+                y_offset = (canvas_height - new_height) // 2
+                self.canvas.create_image(x_offset, y_offset, anchor=tk.NW, image=self.img_tk)
+                self.canvas.image = self.img_tk
+
+    def display_demosaic(self):
+        if self.img is not None:
+            display_demosaiced_images(self.img)
+        else:
+            self.status_label.config(text="Load an image first.")
+
+    def toggle_roi_selection(self):
+        if self.img is not None:
+            self.selecting_roi = not self.selecting_roi
+            if self.selecting_roi:
+                self.status_label.config(text="Click and drag to select ROI on the image.")
+                self.canvas.config(cursor="crosshair")
+            else:
+                self.status_label.config(text="ROI selection disabled.")
+                self.canvas.config(cursor="")
+                if self.roi_rect:
+                    self.canvas.delete(self.roi_rect)
+                    self.roi_rect = None
+        else:
+            self.status_label.config(text="Load an image first.")
+
+    def calculate(self):
+        if self.img is not None:
+            c_bounds = None
+            if self.roi and self.roi != (0, 0, 0, 0):
+                x, y, w, h = self.roi
+                h_img, w_img = self.img.shape[:2]
+                c_bounds = [x / w_img, (x + w) / w_img, y / h_img, (y + h) / h_img]
+            
+            pol_type = self.pol_var.get()
+            if pol_type == "linear":
+                self.pol_params = img_to_AoI_to_linear_pol_params_pipeline(self.img, c_bounds)
+            elif pol_type == "circular":
+                self.pol_params = img_to_AoI_to_circular_pol_params_pipeline(self.img, c_bounds)
+            
+            self.status_label.config(text=f"Polarization calculated for {pol_type}.")
+        else:
+            self.status_label.config(text="Load an image first.")
+
+    def export_csv(self):
+        if self.pol_params is not None:
+            file_path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
+            if file_path:
+                # Dummy file params
+                file_params = {'az': 0, 'ze': 0, 'cze': 0, 'exp': 100, 'ISO': 100, 'obs': False}
+                oversat, undersat = 0.0, 0.0  # Dummy saturation
+                pol_type = self.pol_var.get()
+                circ_test = (pol_type == "circular")
+                DoLP_SP_avg = None
+                AoLP_SP_avg = None
+                DoCP_SP_avg = None
+                if pol_type == "linear":
+                    DoLP_SP_avg, AoLP_SP_avg = XoLP_superpixel_avg_from_img(self.img)
+                elif pol_type == "circular":
+                    DoCP_SP_avg = XoCP_superpixel_avg_from_img(self.img)
+                
+                pol_summary_export(file_path, self.pol_params, file_params, oversat, undersat, 
+                                   DoLP_SP_avg=DoLP_SP_avg, AoLP_SP_avg=AoLP_SP_avg, 
+                                   circ_test=circ_test, DoCP_SP_avg=DoCP_SP_avg)
+                self.status_label.config(text="Exported to CSV.")
+        else:
+            self.status_label.config(text="Calculate polarization first.")
+
 if __name__ == "__main__":
-    main()
+    # Uncomment to run GUI instead of main
+    gui = PolarizationGUI()
+    gui.mainloop()
+    # main()
 
 # CODE GRAVEYARD
 '''previous version of stokes_norm with a gain of 0.5 (it made sense at the time)'''
