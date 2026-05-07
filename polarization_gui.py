@@ -37,6 +37,9 @@ class PolarizationGUI(tk.Tk):
         self.display_demosaic_btn = tk.Button(self.left_frame, text="Display Demosaiced", command=self.display_demosaic)
         self.display_demosaic_btn.pack(fill=tk.X, pady=4)
 
+        self.display_saturation_histogram_btn = tk.Button(self.left_frame, text="Display Saturation Histogram", command=self.display_saturation_histogram)
+        self.display_saturation_histogram_btn.pack(fill=tk.X, pady=4)
+
         self.filter_label = tk.Label(self.left_frame, text="Select Filter:")
         self.filter_label.pack(pady=(12, 2))
         self.filter_var = tk.StringVar(value="None")
@@ -199,10 +202,19 @@ class PolarizationGUI(tk.Tk):
         if self.processor.img is None:
             self.status_label.config(text="Load an image first.")
             return
-        display = self.processor.demosaic_preview()
+        display = self.processor.preview_filtered_demosaiced()
         cv2.imshow('Demosaiced Images', display)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
+    
+    def display_saturation_histogram(self):
+        if self.processor.img is None:
+            self.status_label.config(text="Load an image first.")
+            return
+        hist = self.processor.calculate_saturation_histogram(roi=self.processor.roi)
+        hist.show()
+        return
+
 
     def apply_filter(self):
         if self.processor.img_org is None:

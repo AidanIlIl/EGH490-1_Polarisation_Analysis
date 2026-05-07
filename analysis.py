@@ -300,6 +300,7 @@ class PolarizationProcessor:
             pol_angles = hf.pol_split(self.img_org)
             filtered_angles = [cv2.GaussianBlur(angle, (kernel, kernel), sigma) for angle in pol_angles]
             self.img = self.pol_combine(filtered_angles)
+
         else:
             self.reset_image()
         self.pol_params = None
@@ -319,6 +320,26 @@ class PolarizationProcessor:
         bottom_row = np.hstack([pol_angles_norm[2], pol_angles_norm[3]])
         combined = np.vstack([top_row, bottom_row])
         return combined
+    
+    def calculate_saturation_histogram(self, roi=None):
+        if self.img is None:
+            return None
+        
+        if roi is not None and roi[2] > 0 and roi[3] > 0:
+            x, y, w, h = roi
+            h_img, w_img = self.img.shape[:2]
+            c_bounds = [x / w_img, (x + w) / w_img, y / h_img, (y + h) / h_img]
+            img_AoI = hf.crop_to_proportions(self.img, c_bounds)
+            
+        else:
+            img_AoI = hf.crop_to_proportions(self.img, gvars.get_AoI_bounds())
+        oversat, undersat = hf.sat_pct(img_AoI)
+        fig, ax = plt.subplots()
+        ax.hist(img_AoI.flatten(), bins=50, alpha=0.7)
+        ax.set_title(f'Saturation Histogram (Oversat: {oversat:.2f}%, Undersat: {undersat:.2f}%)')
+        ax.set_xlabel('Pixel Intensity')
+        ax.set_ylabel('Frequency')
+        return fig
 
     def calculate(self, pol_type='linear', roi=None):
         self.pol_type = pol_type
@@ -386,6 +407,7 @@ class PolarizationProcessor:
         img[1::2, 0::2] = deg135
         img[1::2, 1::2] = deg0
         return img
+    
 
 #%% LINEAR POLARISATION ANALYSIS FUNCTIONS
 def img_to_AoI_to_linear_pol_params_pipeline(img, c_bounds=None):
