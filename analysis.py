@@ -1,3 +1,23 @@
+# if the reading is at 255 of any pixzel the entire cluster of 4 pixels is considered saturated (as the DoP calculation will be inaccurate) and masked out (i.e. not included in DoP calculations)
+# if the reading is 0 be sus
+# there is code to find the saturated pixels.
+# saturation disribution is probs good.
+# distibution 1 per pixel cluster.
+# per pxiel averaging should always be done before the stokes calculation
+# justify why the superpixel averaging is done before the stokes calculation (i.e. that the stokes calculation is not linear and therefore the order of operations matters)
+# half of report explaing how this stuff gets to the camera errors and shit .
+# maybe 2 angles that are zero?
+# think how we can calibrate and get known data?
+# Gausian bluring
+# Denoising methods and comparing the results (big chunk of paper)
+# Signal to Noise Ratio
+
+# de mosaic -> gausain blur (other image proccesing shabang) -> remosic -> calcualte polartsiaot. 
+
+# look up how white balence works
+
+#think of ways to calibrate the camera (polarisation shiz)
+
 #%% 
 # IMPORTS
 import cv2
@@ -598,7 +618,9 @@ class PolarizationGUI(tk.Tk):
         self.geometry("800x600")
 
         # Variables
+        self.img_org = None
         self.img = None
+        self.filter = 0
         self.roi = None
         self.pol_params = None
         self.pol_type = "linear"  # or "circular"
@@ -612,6 +634,39 @@ class PolarizationGUI(tk.Tk):
 
         self.display_demosaic_btn = tk.Button(self, text="Display Demosaiced", command=self.display_demosaic)
         self.display_demosaic_btn.pack(pady=5)
+
+        self.apply_filter_btn = tk.Button(self, text="Apply Filter", command=self.apply_filter)
+        self.apply_filter_btn.pack(pady=5)
+
+        # Filter selection
+        self.filter_var = tk.StringVar(value="None")
+        self.filter_label = tk.Label(self, text="Select Filter:")
+        self.filter_label.pack(pady=5)
+        self.filter_menu = tk.OptionMenu(self, self.filter_var, "None", "Gaussian Blur", command=self.update_filter_params)
+        self.filter_menu.pack(pady=5)
+
+        # Filter parameters frame
+        self.params_frame = tk.Frame(self)
+        self.params_frame.pack(pady=5)
+
+        # Gaussian Blur params
+        self.kernel_label = tk.Label(self.params_frame, text="Kernel Size (odd):")
+        self.kernel_label.grid(row=0, column=0)
+        self.kernel_var = tk.IntVar(value=5)
+        self.kernel_entry = tk.Entry(self.params_frame, textvariable=self.kernel_var)
+        self.kernel_entry.grid(row=0, column=1)
+
+        self.sigma_label = tk.Label(self.params_frame, text="Sigma:")
+        self.sigma_label.grid(row=1, column=0)
+        self.sigma_var = tk.DoubleVar(value=1.0)
+        self.sigma_entry = tk.Entry(self.params_frame, textvariable=self.sigma_var)
+        self.sigma_entry.grid(row=1, column=1)
+
+        # Initially hide params
+        self.params_frame.pack_forget()
+
+        self.preview_btn = tk.Button(self, text="Preview Filtered Demosaiced", command=self.preview_filter)
+        self.preview_btn.pack(pady=5)
 
         self.select_roi_btn = tk.Button(self, text="Select ROI on Canvas", command=self.toggle_roi_selection)
         self.select_roi_btn.pack(pady=5)
@@ -649,10 +704,17 @@ class PolarizationGUI(tk.Tk):
         self.status_label = tk.Label(self, text="Load an image to start")
         self.status_label.pack(pady=5)
 
+    def update_filter_params(self, value):
+        if value == "Gaussian Blur":
+            self.params_frame.pack(pady=5)
+        else:
+            self.params_frame.pack_forget()
+
     def load_image(self):
         file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.png *.jpg *.jpeg *.bmp")])
         if file_path:
             self.img = cv2.imread(file_path, cv2.IMREAD_GRAYSCALE)  # Assume grayscale polarsens
+            self.img_org = self.img.copy()  # Store original image for resetting filters
             if self.img is not None:
                 # Store original PIL image
                 self.original_img = Image.fromarray(self.img)
@@ -782,6 +844,55 @@ class PolarizationGUI(tk.Tk):
             display_demosaiced_images(self.img)
         else:
             self.status_label.config(text="Load an image first.")
+    
+    def apply_filter(self):
+        if self.img_org is not None and self.filter_var.get() != "None":
+            pol_angles = hf.pol_split(self.img_org)
+            filtered_angles = []
+            if self.filter_var.get() == "Gaussian Blur":
+                kernel = self.kernel_var.get()
+                if kernel % 2 == 0:
+                    kernel += 1
+                    self.kernel_var.set(kernel)
+                sigma = self.sigma_var.get()
+                for angle in pol_angles:
+                    filtered = cv2.GaussianBlur(angle, (kernel, kernel), sigma)
+                    filtered_angles.append(filtered)
+            # recombine
+            self.img = self.pol_combine(filtered_angles)
+            self.resize_image()  # update display
+            self.status_label.config(text="Filter applied to image.")
+        else:
+            self.status_label.config(text="Load image and select filter first.")
+
+    def preview_filter(self):
+        if self.img is not None and self.filter_var.get() != "None":
+            pol_angles = hf.pol_split(self.img)
+            filtered_angles = []
+            if self.filter_var.get() == "Gaussian Blur":
+                kernel = self.kernel_var.get()
+                if kernel % 2 == 0:
+                    kernel += 1
+                    self.kernel_var.set(kernel)
+                sigma = self.sigma_var.get()
+                for angle in pol_angles:
+                    filtered = cv2.GaussianBlur(angle, (kernel, kernel), sigma)
+                    filtered_angles.append(filtered)
+            # display similar to display_demosaiced_images
+            pol_angles_norm = [(angle / 255.0 * 255).astype(np.uint8) for angle in filtered_angles]
+            top_row = np.hstack([pol_angles_norm[0], pol_angles_norm[1]])
+            bottom_row = np.hstack([pol_angles_norm[2], pol_angles_norm[3]])
+            combined = np.vstack([top_row, bottom_row])
+            h, w = combined.shape[:2]
+            scale = min(1200 / w, 800 / h)
+            if scale < 1:
+                new_w, new_h = int(w * scale), int(h * scale)
+                combined = cv2.resize(combined, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+            cv2.imshow('Filtered Demosaiced Images', combined)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+        else:
+            self.status_label.config(text="Load image and select filter first.")
 
     def toggle_roi_selection(self):
         if self.img is not None:
@@ -839,6 +950,18 @@ class PolarizationGUI(tk.Tk):
                 self.status_label.config(text="Exported to CSV.")
         else:
             self.status_label.config(text="Calculate polarization first.")
+
+    def pol_combine(self, pol_angles):
+        deg0, deg45, deg90, deg135 = pol_angles
+        # assume all same size, half of full
+        h, w = deg0.shape
+        full_h, full_w = 2*h, 2*w
+        img = np.zeros((full_h, full_w), dtype=np.uint8)
+        img[0::2, 0::2] = deg90
+        img[0::2, 1::2] = deg45
+        img[1::2, 0::2] = deg135
+        img[1::2, 1::2] = deg0
+        return img
 
 if __name__ == "__main__":
     # Uncomment to run GUI instead of main
