@@ -615,7 +615,7 @@ class PolarizationGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Polarization Analysis GUI")
-        self.geometry("800x600")
+        self.geometry("1000x800")
 
         # Variables
         self.img_org = None
@@ -626,27 +626,34 @@ class PolarizationGUI(tk.Tk):
         self.pol_type = "linear"  # or "circular"
         self.roi_start = None
         self.roi_rect = None
-        self.selecting_roi = False
 
-        # Buttons
-        self.load_btn = tk.Button(self, text="Load Image", command=self.load_image)
+        # Main frame
+        self.main_frame = tk.Frame(self)
+        self.main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Left frame for buttons
+        self.left_frame = tk.Frame(self.main_frame)
+        self.left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+
+        # Buttons in left frame
+        self.load_btn = tk.Button(self.left_frame, text="Load Image", command=self.load_image)
         self.load_btn.pack(pady=5)
 
-        self.display_demosaic_btn = tk.Button(self, text="Display Demosaiced", command=self.display_demosaic)
+        self.display_demosaic_btn = tk.Button(self.left_frame, text="Display Demosaiced", command=self.display_demosaic)
         self.display_demosaic_btn.pack(pady=5)
 
-        self.apply_filter_btn = tk.Button(self, text="Apply Filter", command=self.apply_filter)
+        self.apply_filter_btn = tk.Button(self.left_frame, text="Apply Filter", command=self.apply_filter)
         self.apply_filter_btn.pack(pady=5)
 
         # Filter selection
         self.filter_var = tk.StringVar(value="None")
-        self.filter_label = tk.Label(self, text="Select Filter:")
+        self.filter_label = tk.Label(self.left_frame, text="Select Filter:")
         self.filter_label.pack(pady=5)
-        self.filter_menu = tk.OptionMenu(self, self.filter_var, "None", "Gaussian Blur", command=self.update_filter_params)
+        self.filter_menu = tk.OptionMenu(self.left_frame, self.filter_var, "None", "Gaussian Blur", command=self.update_filter_params)
         self.filter_menu.pack(pady=5)
 
         # Filter parameters frame
-        self.params_frame = tk.Frame(self)
+        self.params_frame = tk.Frame(self.left_frame)
         self.params_frame.pack(pady=5)
 
         # Gaussian Blur params
@@ -665,40 +672,42 @@ class PolarizationGUI(tk.Tk):
         # Initially hide params
         self.params_frame.pack_forget()
 
-        self.preview_btn = tk.Button(self, text="Preview Filtered Demosaiced", command=self.preview_filter)
+        self.preview_btn = tk.Button(self.left_frame, text="Preview Filtered Demosaiced", command=self.preview_filter)
         self.preview_btn.pack(pady=5)
-
-        self.select_roi_btn = tk.Button(self, text="Select ROI on Canvas", command=self.toggle_roi_selection)
-        self.select_roi_btn.pack(pady=5)
 
         # Radio buttons for pol type
         self.pol_var = tk.StringVar(value="linear")
-        tk.Radiobutton(self, text="Linear Polarization", variable=self.pol_var, value="linear").pack()
-        tk.Radiobutton(self, text="Circular Polarization", variable=self.pol_var, value="circular").pack()
+        tk.Radiobutton(self.left_frame, text="Linear Polarization", variable=self.pol_var, value="linear").pack()
+        tk.Radiobutton(self.left_frame, text="Circular Polarization", variable=self.pol_var, value="circular").pack()
 
-        self.calculate_btn = tk.Button(self, text="Calculate Polarization", command=self.calculate)
+        self.calculate_btn = tk.Button(self.left_frame, text="Calculate Polarization", command=self.calculate)
         self.calculate_btn.pack(pady=5)
 
-        # Analysis buttons
-        self.plot_dolp_btn = tk.Button(self, text="Plot DoLP Map", command=self.plot_dolp)
-        self.plot_dolp_btn.pack(pady=2)
-
-        self.plot_aolp_btn = tk.Button(self, text="Plot AoLP Map", command=self.plot_aolp)
-        self.plot_aolp_btn.pack(pady=2)
-
-        self.plot_hist_btn = tk.Button(self, text="Plot DoLP Histogram", command=self.plot_dolp_hist)
-        self.plot_hist_btn.pack(pady=2)
-
-        self.export_csv_btn = tk.Button(self, text="Export to CSV", command=self.export_csv)
+        self.export_csv_btn = tk.Button(self.left_frame, text="Export to CSV", command=self.export_csv)
         self.export_csv_btn.pack(pady=5)
 
+        # Right frame for grid
+        self.grid_frame = tk.Frame(self.main_frame)
+        self.grid_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        # Configure grid weights
+        self.grid_frame.grid_rowconfigure(0, weight=1)
+        self.grid_frame.grid_rowconfigure(1, weight=1)
+        self.grid_frame.grid_columnconfigure(0, weight=1)
+        self.grid_frame.grid_columnconfigure(1, weight=1)
+
         # Image display canvas
-        self.canvas = tk.Canvas(self)
-        self.canvas.pack(fill=tk.BOTH, expand=True, pady=10)
+        self.canvas = tk.Canvas(self.grid_frame)
+        self.canvas.grid(row=0, column=0, sticky='nsew')
         self.canvas.bind('<Configure>', lambda event: self.resize_image())
         self.canvas.bind('<ButtonPress-1>', self.on_mouse_press)
         self.canvas.bind('<B1-Motion>', self.on_mouse_drag)
         self.canvas.bind('<ButtonRelease-1>', self.on_mouse_release)
+
+        # Initialize plot canvases
+        self.dolp_canvas = None
+        self.aolp_canvas = None
+        self.hist_canvas = None
 
         # Status label
         self.status_label = tk.Label(self, text="Load an image to start")
@@ -724,13 +733,13 @@ class PolarizationGUI(tk.Tk):
                 self.status_label.config(text="Failed to load image.")
 
     def on_mouse_press(self, event):
-        if self.selecting_roi and hasattr(self, 'original_img'):
+        if hasattr(self, 'original_img'):
             self.roi_start = (event.x, event.y)
             if self.roi_rect:
                 self.canvas.delete(self.roi_rect)
 
     def on_mouse_drag(self, event):
-        if self.selecting_roi and self.roi_start:
+        if self.roi_start:
             if self.roi_rect:
                 self.canvas.delete(self.roi_rect)
             x1, y1 = self.roi_start
@@ -738,7 +747,7 @@ class PolarizationGUI(tk.Tk):
             self.roi_rect = self.canvas.create_rectangle(x1, y1, x2, y2, outline='red', width=2)
 
     def on_mouse_release(self, event):
-        if self.selecting_roi and self.roi_start:
+        if self.roi_start:
             x1, y1 = self.roi_start
             x2, y2 = event.x, event.y
             # Convert to image coordinates
@@ -757,69 +766,6 @@ class PolarizationGUI(tk.Tk):
             roi_y2 = min(img_height, (y2 - y_offset) / scale)
             self.roi = (roi_x1, roi_y1, roi_x2 - roi_x1, roi_y2 - roi_y1)
             self.status_label.config(text=f"ROI selected: {self.roi}")
-            self.selecting_roi = False
-            self.canvas.config(cursor="")
-
-    def plot_dolp(self):
-        if self.pol_params:
-            S, pol_vect = self.pol_params
-            DoLP, AoLP = pol_vect
-            pol_type = self.pol_var.get()
-            fig, ax = plt.subplots()
-            if pol_type == "circular":
-                im = ax.imshow(DoLP, cmap='RdBu', vmin=-1, vmax=1)
-                ax.set_title('Degree of Circular Polarization (DoCP)')
-                ax.set_xlabel('DoCP')
-            else:
-                im = ax.imshow(DoLP, cmap='viridis')
-                ax.set_title('Degree of Linear Polarization (DoLP)')
-                ax.set_xlabel('DoLP')
-            plt.colorbar(im, ax=ax)
-            self.show_plot_window(fig, "Polarization Magnitude Map")
-        else:
-            self.status_label.config(text="Calculate polarization first.")
-
-    def plot_aolp(self):
-        if self.pol_params:
-            pol_type = self.pol_var.get()
-            if pol_type == "circular":
-                self.status_label.config(text="Circular polarization has no meaningful AoLP map.")
-                return
-            S, pol_vect = self.pol_params
-            DoLP, AoLP = pol_vect
-            fig, ax = plt.subplots()
-            im = ax.imshow(AoLP, cmap='hsv')
-            ax.set_title('Angle of Linear Polarization (AoLP)')
-            ax.set_xlabel('AoLP (radians)')
-            plt.colorbar(im, ax=ax)
-            self.show_plot_window(fig, "AoLP Map")
-        else:
-            self.status_label.config(text="Calculate polarization first.")
-
-    def plot_dolp_hist(self):
-        if self.pol_params:
-            S, pol_vect = self.pol_params
-            DoLP, AoLP = pol_vect
-            pol_type = self.pol_var.get()
-            fig, ax = plt.subplots()
-            ax.hist(DoLP.flatten(), bins=50, alpha=0.7)
-            if pol_type == "circular":
-                ax.set_title('DoCP Histogram')
-                ax.set_xlabel('DoCP')
-            else:
-                ax.set_title('DoLP Histogram')
-                ax.set_xlabel('DoLP')
-            ax.set_ylabel('Frequency')
-            self.show_plot_window(fig, "Polarization Histogram")
-        else:
-            self.status_label.config(text="Calculate polarization first.")
-
-    def show_plot_window(self, fig, title):
-        window = tk.Toplevel(self)
-        window.title(title)
-        canvas = FigureCanvasTkAgg(fig, master=window)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
     def resize_image(self):
         if hasattr(self, 'original_img') and self.original_img:
@@ -863,6 +809,7 @@ class PolarizationGUI(tk.Tk):
             self.resize_image()  # update display
             self.status_label.config(text="Filter applied to image.")
         else:
+            self.img = self.img_org.copy()
             self.status_label.config(text="Load image and select filter first.")
 
     def preview_filter(self):
@@ -894,21 +841,6 @@ class PolarizationGUI(tk.Tk):
         else:
             self.status_label.config(text="Load image and select filter first.")
 
-    def toggle_roi_selection(self):
-        if self.img is not None:
-            self.selecting_roi = not self.selecting_roi
-            if self.selecting_roi:
-                self.status_label.config(text="Click and drag to select ROI on the image.")
-                self.canvas.config(cursor="crosshair")
-            else:
-                self.status_label.config(text="ROI selection disabled.")
-                self.canvas.config(cursor="")
-                if self.roi_rect:
-                    self.canvas.delete(self.roi_rect)
-                    self.roi_rect = None
-        else:
-            self.status_label.config(text="Load an image first.")
-
     def calculate(self):
         if self.img is not None:
             c_bounds = None
@@ -923,9 +855,74 @@ class PolarizationGUI(tk.Tk):
             elif self.pol_type == "circular":
                 self.pol_params = img_to_AoI_to_circular_pol_params_pipeline(self.img, c_bounds)
             
+            self.update_plots()
             self.status_label.config(text=f"Polarization calculated for {self.pol_type}.")
         else:
             self.status_label.config(text="Load an image first.")
+
+    def update_plots(self):
+        if self.pol_params:
+            S, pol_vect = self.pol_params
+            DoLP, AoLP = pol_vect
+            pol_type = self.pol_var.get()
+
+            # DoLP Map
+            fig1, ax1 = plt.subplots()
+            if pol_type == "circular":
+                im1 = ax1.imshow(DoLP, cmap='RdBu', vmin=-1, vmax=1)
+                ax1.set_title('Degree of Circular Polarization (DoCP)')
+                ax1.set_xlabel('DoCP')
+            else:
+                im1 = ax1.imshow(DoLP, cmap='viridis')
+                ax1.set_title('Degree of Linear Polarization (DoLP)')
+                ax1.set_xlabel('DoLP')
+            plt.colorbar(im1, ax=ax1)
+
+            if self.dolp_canvas is None:
+                self.dolp_canvas = FigureCanvasTkAgg(fig1, master=self.grid_frame)
+                self.dolp_canvas.get_tk_widget().grid(row=0, column=1, sticky='nsew')
+            else:
+                self.dolp_canvas.figure = fig1
+                self.dolp_canvas.draw()
+
+            # AoLP Map
+            if pol_type == "linear":
+                fig2, ax2 = plt.subplots()
+                im2 = ax2.imshow(AoLP, cmap='hsv')
+                ax2.set_title('Angle of Linear Polarization (AoLP)')
+                ax2.set_xlabel('AoLP (radians)')
+                plt.colorbar(im2, ax=ax2)
+
+                if self.aolp_canvas is None:
+                    self.aolp_canvas = FigureCanvasTkAgg(fig2, master=self.grid_frame)
+                    self.aolp_canvas.get_tk_widget().grid(row=1, column=0, sticky='nsew')
+                else:
+                    self.aolp_canvas.figure = fig2
+                    self.aolp_canvas.draw()
+            else:
+                if self.aolp_canvas is not None:
+                    self.aolp_canvas.get_tk_widget().grid_remove()
+                    self.aolp_canvas = None
+
+            # Histogram
+            fig3, ax3 = plt.subplots()
+            ax3.hist(DoLP.flatten(), bins=50, alpha=0.7)
+            if pol_type == "circular":
+                ax3.set_title('DoCP Histogram')
+                ax3.set_xlabel('DoCP')
+            else:
+                ax3.set_title('DoLP Histogram')
+                ax3.set_xlabel('DoLP')
+            ax3.set_ylabel('Frequency')
+
+            if self.hist_canvas is None:
+                self.hist_canvas = FigureCanvasTkAgg(fig3, master=self.grid_frame)
+                self.hist_canvas.get_tk_widget().grid(row=1, column=1, sticky='nsew')
+            else:
+                self.hist_canvas.figure = fig3
+                self.hist_canvas.draw()
+        else:
+            self.status_label.config(text="Calculate polarization first.")
 
     def export_csv(self):
         if self.pol_params is not None:
