@@ -205,6 +205,188 @@ def display_demosaiced_images(img):
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
+
+def demosaic_combined(img):
+    pol_angles = hf.pol_split(img)
+    pol_angles_norm = [(angle / 255.0 * 255).astype(np.uint8) for angle in pol_angles]
+    top_row = np.hstack([pol_angles_norm[0], pol_angles_norm[1]])
+    bottom_row = np.hstack([pol_angles_norm[2], pol_angles_norm[3]])
+    return np.vstack([top_row, bottom_row])
+
+
+def _save_figure(fig, path):
+    fig.savefig(path, bbox_inches='tight')
+    plt.close(fig)
+
+
+def save_dolp_map(DoLP, path, pol_type='linear'):
+    fig, ax = plt.subplots()
+    if pol_type == 'circular':
+        im = ax.imshow(DoLP, cmap='RdBu', vmin=-1, vmax=1)
+        ax.set_title('DoCP')
+    else:
+        im = ax.imshow(DoLP, cmap='viridis')
+        ax.set_title('DoLP')
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    _save_figure(fig, path)
+
+
+def save_aolp_map(AoLP, path):
+    fig, ax = plt.subplots()
+    ax.imshow(AoLP, cmap='hsv')
+    ax.set_title('AoLP')
+    plt.colorbar(ax.images[0], ax=ax, fraction=0.046, pad=0.04)
+    _save_figure(fig, path)
+
+
+def save_histogram(DoLP, path, pol_type='linear'):
+    fig, ax = plt.subplots()
+    ax.hist(DoLP.flatten(), bins=50, alpha=0.7)
+    ax.set_title('DoLP Histogram' if pol_type == 'linear' else 'DoCP Histogram')
+    ax.set_xlabel('DoLP' if pol_type == 'linear' else 'DoCP')
+    ax.set_ylabel('Frequency')
+    _save_figure(fig, path)
+
+
+def save_polarization_maps(pol_params, output_dir, prefix='pol', pol_type='linear'):
+    os.makedirs(output_dir, exist_ok=True)
+    S, pol_vect = pol_params
+    DoLP, AoLP = pol_vect
+    save_dolp_map(DoLP, os.path.join(output_dir, f'{prefix}_dolp.png'), pol_type=pol_type)
+    if pol_type == 'linear':
+        save_aolp_map(AoLP, os.path.join(output_dir, f'{prefix}_aolp.png'))
+    save_histogram(DoLP, os.path.join(output_dir, f'{prefix}_hist.png'), pol_type=pol_type)
+
+
+def save_hsv_image(pol_vect, output_path):
+    XoLP_to_HSV_export(pol_vect, output_path)
+
+
+def save_circular_intensity(DoCP, output_path):
+    DoCP_to_circ_pol_intensity_img_export(DoCP, np.nanmean(DoCP), output_path)
+
+
+class PolarizationProcessor:
+    def __init__(self):
+        self.img_org = None
+        self.img = None
+        self.pol_params = None
+        self.pol_type = 'linear'
+        self.roi = None
+        self.original_img = None
+
+    def load_image(self, file_path):
+        image = cv2.imread(file_path, cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            return False
+        self.img_org = image.copy()
+        self.img = image.copy()
+        self.original_img = Image.fromarray(self.img)
+        self.pol_params = None
+        self.roi = None
+        return True
+
+    def reset_image(self):
+        if self.img_org is not None:
+            self.img = self.img_org.copy()
+            self.pol_params = None
+
+    def apply_filter(self, filter_name='None', kernel=5, sigma=1.0):
+        if self.img_org is None:
+            return
+        if filter_name == 'Gaussian Blur':
+            if kernel % 2 == 0:
+                kernel += 1
+            pol_angles = hf.pol_split(self.img_org)
+            filtered_angles = [cv2.GaussianBlur(angle, (kernel, kernel), sigma) for angle in pol_angles]
+            self.img = self.pol_combine(filtered_angles)
+        else:
+            self.reset_image()
+        self.pol_params = None
+
+    def preview_filtered_demosaiced(self, filter_name='None', kernel=5, sigma=1.0):
+        if self.img_org is None:
+            return None
+        if filter_name == 'Gaussian Blur':
+            if kernel % 2 == 0:
+                kernel += 1
+            pol_angles = hf.pol_split(self.img_org)
+            filtered_angles = [cv2.GaussianBlur(angle, (kernel, kernel), sigma) for angle in pol_angles]
+        else:
+            filtered_angles = hf.pol_split(self.img_org)
+        pol_angles_norm = [(angle / 255.0 * 255).astype(np.uint8) for angle in filtered_angles]
+        top_row = np.hstack([pol_angles_norm[0], pol_angles_norm[1]])
+        bottom_row = np.hstack([pol_angles_norm[2], pol_angles_norm[3]])
+        combined = np.vstack([top_row, bottom_row])
+        return combined
+
+    def calculate(self, pol_type='linear', roi=None):
+        self.pol_type = pol_type
+        self.roi = roi
+        c_bounds = None
+        if roi is not None and roi[2] > 0 and roi[3] > 0:
+            x, y, w, h = roi
+            h_img, w_img = self.img.shape[:2]
+            c_bounds = [x / w_img, (x + w) / w_img, y / h_img, (y + h) / h_img]
+        if self.pol_type == 'linear':
+            self.pol_params = img_to_AoI_to_linear_pol_params_pipeline(self.img, c_bounds)
+        else:
+            self.pol_params = img_to_AoI_to_circular_pol_params_pipeline(self.img, c_bounds)
+        return self.pol_params
+
+    def save_image(self, path):
+        if self.img is None:
+            return False
+        cv2.imwrite(path, self.img)
+        return True
+
+    def save_demosaic(self, path):
+        if self.img is None:
+            return False
+        combined = demosaic_combined(self.img)
+        cv2.imwrite(path, combined)
+        return True
+
+    def save_polarization_outputs(self, output_dir, prefix='pol', file_params=None, oversat=0.0, undersat=0.0, save_csv=False):
+        if self.pol_params is None:
+            return False
+        os.makedirs(output_dir, exist_ok=True)
+        save_polarization_maps(self.pol_params, output_dir, prefix=prefix, pol_type=self.pol_type)
+        if self.pol_type == 'linear':
+            save_hsv_image(self.pol_params[1], os.path.join(output_dir, f'{prefix}_HSV'))
+        else:
+            DoCP = self.pol_params[1][0]
+            save_circular_intensity(DoCP, os.path.join(output_dir, f'{prefix}_DoCP'))
+        if save_csv:
+            csv_path = os.path.splitext(os.path.join(output_dir, f'{prefix}.csv'))[0]
+            self.export_csv(csv_path, file_params=file_params, oversat=oversat, undersat=undersat)
+        return True
+
+    def export_csv(self, file_path, file_params=None, oversat=0.0, undersat=0.0):
+        if self.pol_params is None:
+            return False
+        file_params = file_params or {'az': 0, 'ze': 0, 'cze': 0, 'exp': 100, 'ISO': 100, 'obs': False}
+        circ_test = self.pol_type == 'circular'
+        DoLP_SP_avg, AoLP_SP_avg, DoCP_SP_avg = None, None, None
+        if self.img is not None:
+            if not circ_test:
+                DoLP_SP_avg, AoLP_SP_avg = XoLP_superpixel_avg_from_img(self.img)
+            else:
+                DoCP_SP_avg = XoCP_superpixel_avg_from_img(self.img)
+        pol_summary_export(file_path, self.pol_params, file_params, oversat, undersat, DoLP_SP_avg=DoLP_SP_avg, AoLP_SP_avg=AoLP_SP_avg, circ_test=circ_test, DoCP_SP_avg=DoCP_SP_avg)
+        return True
+
+    def pol_combine(self, pol_angles):
+        deg0, deg45, deg90, deg135 = pol_angles
+        h, w = deg0.shape
+        full_h, full_w = 2*h, 2*w
+        img = np.zeros((full_h, full_w), dtype=np.uint8)
+        img[0::2, 0::2] = deg90
+        img[0::2, 1::2] = deg45
+        img[1::2, 0::2] = deg135
+        img[1::2, 1::2] = deg0
+        return img
+
 #%% LINEAR POLARISATION ANALYSIS FUNCTIONS
 def img_to_AoI_to_linear_pol_params_pipeline(img, c_bounds=None):
     '''Calculate polarisation parameters from an image (isolating a region of interest)
