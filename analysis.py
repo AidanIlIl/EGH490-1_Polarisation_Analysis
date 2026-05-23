@@ -290,7 +290,7 @@ class PolarizationProcessor:
         if self.img_org is not None:
             self.img = self.img_org.copy()
             self.pol_params = None
-            
+
     def apply_filter(self, filter_name='None', kernel=5, sigma=1.0):
         if self.img_org is None:
             return
@@ -390,7 +390,8 @@ class PolarizationProcessor:
                     S = np.array([np.mean(s_component) for s_component in S_pixels])
                     pol_vect = XoCP(S)
                 
-                DoCP_img = pol_vect[0]
+                poly_vect_pixel = XoCP(stokes_circular(pol_angles))
+                DoCP_img = poly_vect_pixel[0]
                 dolp_std = float(np.std(DoCP_img)) if isinstance(DoCP_img, np.ndarray) else 0.0
                 aolp_std = 0.0
 

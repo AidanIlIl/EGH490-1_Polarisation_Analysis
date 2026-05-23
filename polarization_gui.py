@@ -480,10 +480,14 @@ class PolarizationGUI(tk.Tk):
         self._draw_plot(fig2, 'aolp_canvas', row=1, column=0)
 
         fig3, ax3 = plt.subplots(figsize=(4, 3))
-        ax3.hist(DoLP.flatten(), bins=50, alpha=0.7)
+        ax3.hist(DoLP.flatten(), bins=100, alpha=0.7)
         ax3.set_title('Histogram')
         ax3.set_xlabel('DoLP' if pol_type == 'linear' else 'DoCP')
         ax3.set_ylabel('Frequency')
+        if pol_type == 'linear':
+            ax3.set_xlim(0, 1)
+        else:
+            ax3.set_xlim(-1, 1)
         self._draw_plot(fig3, 'hist_canvas', row=1, column=1)
 
     def update_batch_plots(self):
