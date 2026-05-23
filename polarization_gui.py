@@ -568,7 +568,7 @@ class PolarizationGUI(tk.Tk):
 
             # Row 1, Col 0: AoLP average
             fig4, ax4 = plt.subplots(figsize=(3.5, 3.5), subplot_kw={'projection': 'polar'})
-            scatter4 = ax4.scatter(theta, radii, c=aolp_vals_norm, cmap='hsv', s=20, edgecolors='black', linewidth=0.1)
+            scatter4 = ax4.scatter(theta, radii, c=aolp_vals_norm, cmap='YlGn', s=20, edgecolors='black', linewidth=0.1)
             ax4.set_ylim(0, max(radii) * 1.1 if len(radii) > 0 else 90)
             ax4.set_title('AoLP image average', fontsize=10, pad=10)
             fig4.colorbar(scatter4, ax=ax4, fraction=0.046, pad=0.08)

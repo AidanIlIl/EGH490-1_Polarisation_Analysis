@@ -362,8 +362,9 @@ class PolarizationProcessor:
                     S_pixels = stokes_linear(pol_angles)
                     S = np.array([np.mean(s_component) for s_component in S_pixels])
                     pol_vect = XoLP(S)
+
                 
-                DoLP_img, AoLP_img = pol_vect
+                DoLP_img, AoLP_img = XoLP(stokes_linear(pol_angles))
                 dolp_std = float(np.std(DoLP_img)) if isinstance(DoLP_img, np.ndarray) else 0.0
                 aolp_std = float(np.std(AoLP_img)) if isinstance(AoLP_img, np.ndarray) else 0.0
             else:
