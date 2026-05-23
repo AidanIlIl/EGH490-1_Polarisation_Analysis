@@ -471,7 +471,7 @@ class PolarizationGUI(tk.Tk):
 
         fig2, ax2 = plt.subplots(figsize=(4, 3))
         if pol_type == "linear":
-            im2 = ax2.imshow(AoLP, cmap='hsv')
+            im2 = ax2.imshow(AoLP, cmap='RdBu')
             ax2.set_title('AoLP')
             plt.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
         else:

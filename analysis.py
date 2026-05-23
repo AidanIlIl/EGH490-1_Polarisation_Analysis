@@ -290,6 +290,19 @@ class PolarizationProcessor:
         if self.img_org is not None:
             self.img = self.img_org.copy()
             self.pol_params = None
+            
+    def apply_filter(self, filter_name='None', kernel=5, sigma=1.0):
+        if self.img_org is None:
+            return
+        if filter_name == 'Gaussian Blur':
+            if kernel % 2 == 0:
+                kernel += 1
+            pol_angles = hf.pol_split(self.img_org)
+            filtered_angles = [cv2.GaussianBlur(angle, (kernel, kernel), sigma) for angle in pol_angles]
+            self.img = self.pol_combine(filtered_angles)
+
+        else:
+            self.reset_image()
 
     def load_folder(self, folder_path):
         if not os.path.isdir(folder_path):
