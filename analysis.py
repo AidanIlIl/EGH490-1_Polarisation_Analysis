@@ -291,19 +291,137 @@ class PolarizationProcessor:
             self.img = self.img_org.copy()
             self.pol_params = None
 
-    def apply_filter(self, filter_name='None', kernel=5, sigma=1.0):
-        if self.img_org is None:
-            return
-        if filter_name == 'Gaussian Blur':
-            if kernel % 2 == 0:
-                kernel += 1
-            pol_angles = hf.pol_split(self.img_org)
-            filtered_angles = [cv2.GaussianBlur(angle, (kernel, kernel), sigma) for angle in pol_angles]
-            self.img = self.pol_combine(filtered_angles)
+    def load_folder(self, folder_path):
+        if not os.path.isdir(folder_path):
+            return False
+        supported_exts = {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff'}
+        batch_files = sorted(
+            [os.path.join(folder_path, f) for f in os.listdir(folder_path)
+             if os.path.splitext(f)[1].lower() in supported_exts]
+        )
+        batch_params = []
+        valid_files = []
+        for file_path in batch_files:
+            name = os.path.splitext(os.path.basename(file_path))[0]
+            try:
+                params = hf.param_extract(name)
+            except Exception:
+                continue
+            valid_files.append(file_path)
+            batch_params.append(params)
 
-        else:
-            self.reset_image()
+        if not valid_files:
+            return False
+
+        self.batch_files = valid_files
+        self.batch_params = batch_params
+        self.batch_results = []
+        self.batch_mode = 'raw'
+        self.batch_pol_type = 'linear'
+        self.batch_roi = None
+        self.batch_folder = folder_path
+
+        first_image = cv2.imread(self.batch_files[0], cv2.IMREAD_GRAYSCALE)
+        if first_image is None:
+            return False
+        self.batch_first_img = first_image.copy()
+        self.img_org = first_image.copy()
+        self.img = first_image.copy()
+        self.original_img = Image.fromarray(self.img)
         self.pol_params = None
+        return True
+
+    def batch_set_roi(self, roi):
+        self.batch_roi = roi
+        self.roi = roi
+
+    def batch_calculate(self, mode='raw', pol_type='linear'):
+        if not hasattr(self, 'batch_files') or not self.batch_files:
+            return False
+        if self.batch_roi is None or self.batch_roi[2] <= 0 or self.batch_roi[3] <= 0:
+            return False
+
+        self.batch_mode = mode
+        self.batch_pol_type = pol_type
+        self.batch_results = []
+
+        x, y, w, h = self.batch_roi
+        for file_path, params in zip(self.batch_files, self.batch_params):
+            img = cv2.imread(file_path, cv2.IMREAD_GRAYSCALE)
+            if img is None:
+                continue
+            c_bounds = [x / img.shape[1], (x + w) / img.shape[1], y / img.shape[0], (y + h) / img.shape[0]]
+            pol_angles = polarsens_to_cropped_pol_angles(img, c_bounds)
+
+            if pol_type == 'linear':
+                if mode == 'raw':
+                    pol_angles_avg = [np.mean(pa) for pa in pol_angles]
+                    S = stokes_linear(pol_angles_avg)
+                    pol_vect = XoLP(S)
+                else:
+                    S_pixels = stokes_linear(pol_angles)
+                    S = np.array([np.mean(s_component) for s_component in S_pixels])
+                    pol_vect = XoLP(S)
+                
+                DoLP_img, AoLP_img = pol_vect
+                dolp_std = float(np.std(DoLP_img)) if isinstance(DoLP_img, np.ndarray) else 0.0
+                aolp_std = float(np.std(AoLP_img)) if isinstance(AoLP_img, np.ndarray) else 0.0
+            else:
+                if mode == 'raw':
+                    pol_angles_avg = [np.mean(pa) for pa in pol_angles]
+                    S = stokes_circular(pol_angles_avg)
+                    pol_vect = XoCP(S)
+                else:
+                    S_pixels = stokes_circular(pol_angles)
+                    S = np.array([np.mean(s_component) for s_component in S_pixels])
+                    pol_vect = XoCP(S)
+                
+                DoCP_img = pol_vect[0]
+                dolp_std = float(np.std(DoCP_img)) if isinstance(DoCP_img, np.ndarray) else 0.0
+                aolp_std = 0.0
+
+            roi_img = img[int(y):int(y+h), int(x):int(x+w)]
+            oversat, undersat = hf.sat_pct(roi_img)
+
+            self.batch_results.append({
+                'file': file_path,
+                'params': params,
+                'stokes': S,
+                'pol': pol_vect,
+                'dolp_std': dolp_std,
+                'aolp_std': aolp_std,
+                'saturation': oversat
+            })
+
+        return self.batch_results
+
+    def export_batch_csv(self, file_path):
+        if not hasattr(self, 'batch_results') or not self.batch_results:
+            return False
+        csv_base = file_path[:-4] if file_path.lower().endswith('.csv') else file_path
+        if self.batch_pol_type == 'linear':
+            fields = ['file', 'az', 'ze', 'cze', 'exp', 'ISO', 'obs', 'DoLP', 'AoLP_deg', 'DoLP_std', 'AoLP_std', 'Saturation_pct']
+        else:
+            fields = ['file', 'az', 'ze', 'cze', 'exp', 'ISO', 'obs', 'DoCP', 'DoCP_std', 'Saturation_pct']
+        hf.csv_init(csv_base, fields)
+
+        for result in self.batch_results:
+            params = result['params']
+            pol = result['pol']
+            if self.batch_pol_type == 'linear':
+                DoP, AoP = pol
+                row = [
+                    result['file'], params['az'], params['ze'], params['cze'], params['exp'], params['ISO'], params['obs'],
+                    float(DoP), float(np.rad2deg(AoP)), float(result['dolp_std']), float(result['aolp_std']), float(result['saturation'])
+                ]
+            else:
+                DoCP = pol[0]
+                row = [
+                    result['file'], params['az'], params['ze'], params['cze'], params['exp'], params['ISO'], params['obs'],
+                    float(DoCP), float(result['dolp_std']), float(result['saturation'])
+                ]
+            hf.csv_append(csv_base, row)
+        return True
 
     def preview_filtered_demosaiced(self, filter_name='None', kernel=5, sigma=1.0):
         if self.img_org is None:
