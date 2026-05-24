@@ -131,9 +131,9 @@ class PolarizationGUI(tk.Tk):
         self.batch_folder_label = tk.Label(self.batch_left_frame, text="No folder loaded", anchor="w", justify="left", wraplength=200)
         self.batch_folder_label.pack(fill=tk.X, pady=4)
 
-        self.batch_mode_var = tk.StringVar(value="raw")
+        self.batch_mode_var = tk.StringVar(value="mean")
         tk.Label(self.batch_left_frame, text="Batch monolithic mode:").pack(pady=(12, 2), anchor="w")
-        self.batch_mode_menu = tk.OptionMenu(self.batch_left_frame, self.batch_mode_var, "raw", "stokes_average")
+        self.batch_mode_menu = tk.OptionMenu(self.batch_left_frame, self.batch_mode_var, "mean", "median", "stokes_mean")
         self.batch_mode_menu.pack(fill=tk.X, pady=2)
 
         self.batch_pol_var = tk.StringVar(value="linear")

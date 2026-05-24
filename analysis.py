@@ -348,7 +348,7 @@ class PolarizationProcessor:
         self.batch_roi = roi
         self.roi = roi
 
-    def batch_calculate(self, mode='raw', pol_type='linear'):
+    def batch_calculate(self, mode='mean', pol_type='linear'):
         if not hasattr(self, 'batch_files') or not self.batch_files:
             return False
         if self.batch_roi is None or self.batch_roi[2] <= 0 or self.batch_roi[3] <= 0:
@@ -367,9 +367,13 @@ class PolarizationProcessor:
             pol_angles = polarsens_to_cropped_pol_angles(img, c_bounds)
 
             if pol_type == 'linear':
-                if mode == 'raw':
+                if mode == 'mean':
                     pol_angles_avg = [np.mean(pa) for pa in pol_angles]
                     S = stokes_linear(pol_angles_avg)
+                    pol_vect = XoLP(S)
+                elif mode == 'median':
+                    pol_angles_median = [np.median(pa) for pa in pol_angles]
+                    S = stokes_linear(pol_angles_median)
                     pol_vect = XoLP(S)
                 else:
                     S_pixels = stokes_linear(pol_angles)
@@ -381,9 +385,13 @@ class PolarizationProcessor:
                 dolp_std = float(np.std(DoLP_img)) if isinstance(DoLP_img, np.ndarray) else 0.0
                 aolp_std = float(np.std(AoLP_img)) if isinstance(AoLP_img, np.ndarray) else 0.0
             else:
-                if mode == 'raw':
+                if mode == 'mean':
                     pol_angles_avg = [np.mean(pa) for pa in pol_angles]
                     S = stokes_circular(pol_angles_avg)
+                    pol_vect = XoCP(S)
+                elif mode == 'median':
+                    pol_angles_median = [np.median(pa) for pa in pol_angles]
+                    S = stokes_circular(pol_angles_median)
                     pol_vect = XoCP(S)
                 else:
                     S_pixels = stokes_circular(pol_angles)
