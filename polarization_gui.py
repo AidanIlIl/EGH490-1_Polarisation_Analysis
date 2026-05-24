@@ -475,8 +475,17 @@ class PolarizationGUI(tk.Tk):
             ax2.set_title('AoLP')
             plt.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
         else:
-            ax2.text(0.5, 0.5, 'AoLP not available for circular polarization', ha='center', va='center')
-            ax2.axis('off')
+            # For circular polarisation show Circular Polarisation Ratio (RH/LH)
+            # CPR = (1 + DoCP) / (1 - DoCP) (clip extreme values for display)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                cpr = (1.0 + DoLP) / (1.0 - DoLP)
+            # Replace infinities and NaNs with large number for plotting
+            cpr = np.nan_to_num(cpr, nan=0.0, posinf=np.nanmax(cpr[np.isfinite(cpr)]) if np.any(np.isfinite(cpr)) else 0.0, neginf=0.0)
+            # Clip for visualisation
+            cpr_display = np.clip(cpr, 0.0, 10.0)
+            im2 = ax2.imshow(cpr_display, cmap='plasma', vmin=0, vmax=10)
+            ax2.set_title('Circular Polarisation Ratio (RH/LH)')
+            plt.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
         self._draw_plot(fig2, 'aolp_canvas', row=1, column=0)
 
         fig3, ax3 = plt.subplots(figsize=(4, 3))
@@ -627,6 +636,28 @@ class PolarizationGUI(tk.Tk):
             ax3.set_title('Image saturation % (total 0-255)', fontsize=10, pad=10)
             fig3.colorbar(scatter3, ax=ax3, fraction=0.046, pad=0.08)
             self._draw_batch_plot(fig3, 'saturation', row=1, column=2)
+
+            # Row 1, Col 0: Circular Polarisation Ratio (RH/LH)
+            # CPR = (1 + DoCP) / (1 - DoCP)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                cpr_vals = (1.0 + np.array([float(r['pol'][0]) for r in results], dtype=float)) / (1.0 - np.array([float(r['pol'][0]) for r in results], dtype=float))
+            # mirror the CPR values for hemisphere plotting
+            cpr_vals = self.mirror_array(cpr_vals)
+            # replace infs/nans for plotting
+            finite_mask = np.isfinite(cpr_vals)
+            if np.any(finite_mask):
+                cpr_max = np.nanmax(cpr_vals[finite_mask])
+            else:
+                cpr_max = 1.0
+            cpr_plot_vals = np.nan_to_num(cpr_vals, nan=0.0, posinf=cpr_max, neginf=0.0)
+            cpr_plot_vals = np.clip(cpr_plot_vals, 0.0, max(10.0, cpr_max))
+
+            fig4, ax4 = plt.subplots(figsize=(3.5, 3.5), subplot_kw={'projection': 'polar'})
+            scatter4 = ax4.scatter(theta, radii, c=cpr_plot_vals, cmap='plasma', s=20, edgecolors='black', linewidth=0.1)
+            ax4.set_ylim(0, max(radii) * 1.1 if len(radii) > 0 else 90)
+            ax4.set_title('Circular Polarisation Ratio (RH/LH)', fontsize=10, pad=10)
+            fig4.colorbar(scatter4, ax=ax4, fraction=0.046, pad=0.08)
+            self._draw_batch_plot(fig4, 'cpr', row=2, column=0)
 
     def _draw_plot(self, fig, attr_name, row, column):
         canvas = getattr(self, attr_name)
