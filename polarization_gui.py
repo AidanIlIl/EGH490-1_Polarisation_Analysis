@@ -1,4 +1,5 @@
 import os
+import csv
 import tkinter as tk
 from tkinter import filedialog
 import cv2
@@ -17,27 +18,36 @@ class PolarizationGUI(tk.Tk):
         self.geometry("1200x850")
 
         self.processor = PolarizationProcessor()
+        self.batch_processor1 = PolarizationProcessor()
+        self.batch_processor2 = PolarizationProcessor()
         self.roi_start = None
         self.roi_rect = None
         self.batch_roi_start = None
         self.batch_roi_rect = None
+        self.compare_roi_start = None
+        self.compare_roi_rect = None
+        self.compare_processor_image = None
+        self.compare_results = []
 
         self.page_buttons_frame = tk.Frame(self)
         self.page_buttons_frame.pack(fill=tk.X, padx=8, pady=4)
         tk.Button(self.page_buttons_frame, text="Single Image", command=self.show_single_page).pack(side=tk.LEFT, padx=4)
         tk.Button(self.page_buttons_frame, text="Batch Folder", command=self.show_batch_page).pack(side=tk.LEFT, padx=4)
+        tk.Button(self.page_buttons_frame, text="Batch Compare", command=self.show_compare_page).pack(side=tk.LEFT, padx=4)
 
         self.main_frame = tk.Frame(self)
         self.main_frame.pack(fill=tk.BOTH, expand=True)
 
         self.page1_frame = tk.Frame(self.main_frame)
         self.page2_frame = tk.Frame(self.main_frame)
+        self.page3_frame = tk.Frame(self.main_frame)
 
         self.status_label = tk.Label(self, text="Load an image to start", anchor="w")
         self.status_label.pack(fill=tk.X, padx=8, pady=4)
 
         self._create_single_page()
         self._create_batch_page()
+        self._create_compare_page()
 
         self.show_single_page()
 
@@ -156,6 +166,54 @@ class PolarizationGUI(tk.Tk):
 
         self.batch_plot_canvases = {}
 
+    def _create_compare_page(self):
+        self.compare_left_frame = tk.Frame(self.page3_frame)
+        self.compare_left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=8)
+
+        self.compare_grid_frame = tk.Frame(self.page3_frame)
+        self.compare_grid_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=8, pady=8)
+        self.compare_grid_frame.grid_rowconfigure(0, weight=1)
+        self.compare_grid_frame.grid_rowconfigure(1, weight=1)
+        self.compare_grid_frame.grid_rowconfigure(2, weight=1)
+        self.compare_grid_frame.grid_columnconfigure(0, weight=1)
+        self.compare_grid_frame.grid_columnconfigure(1, weight=1)
+        self.compare_grid_frame.grid_columnconfigure(2, weight=1)
+
+        self.compare_load_btn1 = tk.Button(self.compare_left_frame, text="Load Folder 1", command=self.load_folder1)
+        self.compare_load_btn1.pack(fill=tk.X, pady=4)
+        self.compare_folder_label1 = tk.Label(self.compare_left_frame, text="No folder 1 loaded", anchor="w", justify="left", wraplength=200)
+        self.compare_folder_label1.pack(fill=tk.X, pady=4)
+
+        self.compare_load_btn2 = tk.Button(self.compare_left_frame, text="Load Folder 2", command=self.load_folder2)
+        self.compare_load_btn2.pack(fill=tk.X, pady=4)
+        self.compare_folder_label2 = tk.Label(self.compare_left_frame, text="No folder 2 loaded", anchor="w", justify="left", wraplength=200)
+        self.compare_folder_label2.pack(fill=tk.X, pady=4)
+
+        self.compare_mode_var = tk.StringVar(value="mean")
+        tk.Label(self.compare_left_frame, text="Comparison mode:").pack(pady=(12, 2), anchor="w")
+        self.compare_mode_menu = tk.OptionMenu(self.compare_left_frame, self.compare_mode_var, "mean", "median", "stokes_mean")
+        self.compare_mode_menu.pack(fill=tk.X, pady=2)
+
+        self.compare_pol_var = tk.StringVar(value="linear")
+        tk.Label(self.compare_left_frame, text="Polarization Type:").pack(pady=(12, 2), anchor="w")
+        tk.Radiobutton(self.compare_left_frame, text="Linear", variable=self.compare_pol_var, value="linear").pack(anchor="w")
+        tk.Radiobutton(self.compare_left_frame, text="Circular", variable=self.compare_pol_var, value="circular").pack(anchor="w")
+
+        self.compare_calculate_btn = tk.Button(self.compare_left_frame, text="Calculate Compare", command=self.calculate_compare)
+        self.compare_calculate_btn.pack(fill=tk.X, pady=12)
+
+        self.compare_export_csv_btn = tk.Button(self.compare_left_frame, text="Export Compare CSV", command=self.export_compare_csv)
+        self.compare_export_csv_btn.pack(fill=tk.X, pady=4)
+
+        self.compare_canvas = tk.Canvas(self.compare_grid_frame, bg="black")
+        self.compare_canvas.grid(row=0, column=0, columnspan=3, sticky='nsew', padx=2, pady=2)
+        self.compare_canvas.bind('<Configure>', lambda event: self.resize_compare_image())
+        self.compare_canvas.bind('<ButtonPress-1>', self.compare_on_mouse_press)
+        self.compare_canvas.bind('<B1-Motion>', self.compare_on_mouse_drag)
+        self.compare_canvas.bind('<ButtonRelease-1>', self.compare_on_mouse_release)
+
+        self.compare_plot_canvases = {}
+
     def show_single_page(self):
         self.page_active = 'single'
         self.page2_frame.pack_forget()
@@ -165,8 +223,16 @@ class PolarizationGUI(tk.Tk):
     def show_batch_page(self):
         self.page_active = 'batch'
         self.page1_frame.pack_forget()
+        self.page3_frame.pack_forget()
         self.page2_frame.pack(fill=tk.BOTH, expand=True)
         self.status_label.config(text="Batch folder analysis page active")
+
+    def show_compare_page(self):
+        self.page_active = 'compare'
+        self.page1_frame.pack_forget()
+        self.page2_frame.pack_forget()
+        self.page3_frame.pack(fill=tk.BOTH, expand=True)
+        self.status_label.config(text="Batch comparison page active")
 
     def update_filter_params(self, value):
         if value == "Gaussian Blur":
@@ -205,6 +271,42 @@ class PolarizationGUI(tk.Tk):
             self.status_label.config(text="Folder loaded. Drag on the batch image to select ROI.")
         else:
             self.status_label.config(text="Failed to load folder or no valid images found.")
+
+    def load_folder1(self):
+        folder_path = filedialog.askdirectory()
+        if not folder_path:
+            return
+        success = self.batch_processor1.load_folder(folder_path)
+        if success:
+            self.compare_folder_label1.config(text=f"Loaded {len(self.batch_processor1.batch_files)} images\n{folder_path}")
+            self.compare_processor_image = self.batch_processor1.batch_first_img.copy()
+            self.compare_roi_start = None
+            self.compare_roi_rect = None
+            self.batch_processor1.batch_roi = None
+            self.batch_processor1.roi = None
+            self.compare_compare_image_display = self.compare_processor_image
+            self.resize_compare_image()
+            self.clear_compare_plots()
+            self.status_label.config(text="Folder 1 loaded. Drag on the compare image to select ROI.")
+        else:
+            self.status_label.config(text="Failed to load folder 1 or no valid images found.")
+
+    def load_folder2(self):
+        folder_path = filedialog.askdirectory()
+        if not folder_path:
+            return
+        success = self.batch_processor2.load_folder(folder_path)
+        if success:
+            self.compare_folder_label2.config(text=f"Loaded {len(self.batch_processor2.batch_files)} images\n{folder_path}")
+            if not hasattr(self, 'compare_processor_image') or self.compare_processor_image is None:
+                self.compare_processor_image = self.batch_processor2.batch_first_img.copy()
+                self.resize_compare_image()
+            self.batch_processor2.batch_roi = None
+            self.batch_processor2.roi = None
+            self.clear_compare_plots()
+            self.status_label.config(text="Folder 2 loaded. Drag on the compare image to select ROI.")
+        else:
+            self.status_label.config(text="Failed to load folder 2 or no valid images found.")
 
     def on_mouse_press(self, event):
         if self.processor.original_img is None:
@@ -262,6 +364,35 @@ class PolarizationGUI(tk.Tk):
         self.processor.batch_set_roi(image_roi)
         self.status_label.config(text=f"Batch ROI selected: {tuple(map(int, image_roi))}")
 
+    def compare_on_mouse_press(self, event):
+        if self.compare_processor_image is None:
+            return
+        self.compare_roi_start = (event.x, event.y)
+        if self.compare_roi_rect:
+            self.compare_canvas.delete(self.compare_roi_rect)
+            self.compare_roi_rect = None
+
+    def compare_on_mouse_drag(self, event):
+        if self.compare_roi_start is None:
+            return
+        if self.compare_roi_rect:
+            self.compare_canvas.delete(self.compare_roi_rect)
+        x1, y1 = self.compare_roi_start
+        x2, y2 = event.x, event.y
+        self.compare_roi_rect = self.compare_canvas.create_rectangle(x1, y1, x2, y2, outline='red', width=2)
+
+    def compare_on_mouse_release(self, event):
+        if self.compare_roi_start is None or not hasattr(self, 'compare_processor_image'):
+            return
+        x1, y1 = self.compare_roi_start
+        x2, y2 = event.x, event.y
+        self.compare_roi_start = None
+        self.compare_roi_rect = self.compare_canvas.create_rectangle(x1, y1, x2, y2, outline='red', width=2)
+        image_roi = self._compare_canvas_to_image_roi(x1, y1, x2, y2)
+        self.batch_processor1.batch_set_roi(image_roi)
+        self.batch_processor2.batch_set_roi(image_roi)
+        self.status_label.config(text=f"Comparison ROI selected: {tuple(map(int, image_roi))}")
+
     def _canvas_to_image_roi(self, x1, y1, x2, y2):
         canvas_width = self.canvas.winfo_width()
         canvas_height = self.canvas.winfo_height()
@@ -281,6 +412,21 @@ class PolarizationGUI(tk.Tk):
         canvas_width = self.batch_canvas.winfo_width()
         canvas_height = self.batch_canvas.winfo_height()
         img_width, img_height = self.processor.original_img.size
+        scale = min(canvas_width / img_width, canvas_height / img_height)
+        new_width = int(img_width * scale)
+        new_height = int(img_height * scale)
+        x_offset = (canvas_width - new_width) // 2
+        y_offset = (canvas_height - new_height) // 2
+        roi_x1 = max(0, min(img_width, (x1 - x_offset) / scale))
+        roi_y1 = max(0, min(img_height, (y1 - y_offset) / scale))
+        roi_x2 = max(0, min(img_width, (x2 - x_offset) / scale))
+        roi_y2 = max(0, min(img_height, (y2 - y_offset) / scale))
+        return (min(roi_x1, roi_x2), min(roi_y1, roi_y2), abs(roi_x2 - roi_x1), abs(roi_y2 - roi_y1))
+
+    def _compare_canvas_to_image_roi(self, x1, y1, x2, y2):
+        canvas_width = self.compare_canvas.winfo_width()
+        canvas_height = self.compare_canvas.winfo_height()
+        img_height, img_width = self.compare_processor_image.shape[:2]
         scale = min(canvas_width / img_width, canvas_height / img_height)
         new_width = int(img_width * scale)
         new_height = int(img_height * scale)
@@ -330,6 +476,25 @@ class PolarizationGUI(tk.Tk):
         self.batch_canvas.image = self.batch_img_tk
         self._batch_redraw_roi()
 
+    def resize_compare_image(self):
+        self.compare_canvas.delete("all")
+        self.compare_canvas.update_idletasks()
+        if not hasattr(self, 'compare_processor_image') or self.compare_processor_image is None:
+            return
+        canvas_width = self.compare_canvas.winfo_width()
+        canvas_height = self.compare_canvas.winfo_height()
+        if canvas_width < 2 or canvas_height < 2:
+            return
+        img_height, img_width = self.compare_processor_image.shape[:2]
+        scale = min(canvas_width / img_width, canvas_height / img_height)
+        new_width = int(img_width * scale)
+        new_height = int(img_height * scale)
+        resized_img = Image.fromarray(self.compare_processor_image).resize((new_width, new_height), Image.LANCZOS)
+        self.compare_img_tk = ImageTk.PhotoImage(resized_img)
+        self.compare_canvas.create_image((canvas_width - new_width) // 2, (canvas_height - new_height) // 2, anchor=tk.NW, image=self.compare_img_tk)
+        self.compare_canvas.image = self.compare_img_tk
+        self._compare_redraw_roi()
+
     def _redraw_roi(self):
         if self.processor.roi is None:
             return
@@ -369,6 +534,26 @@ class PolarizationGUI(tk.Tk):
         if self.batch_roi_rect:
             self.batch_canvas.delete(self.batch_roi_rect)
         self.batch_roi_rect = self.batch_canvas.create_rectangle(x1, y1, x2, y2, outline='red', width=2)
+
+    def _compare_redraw_roi(self):
+        if not hasattr(self, 'compare_processor_image') or self.compare_processor_image is None or self.batch_processor1.batch_roi is None:
+            return
+        x, y, w, h = self.batch_processor1.batch_roi
+        canvas_width = self.compare_canvas.winfo_width()
+        canvas_height = self.compare_canvas.winfo_height()
+        img_height, img_width = self.compare_processor_image.shape[:2]
+        scale = min(canvas_width / img_width, canvas_height / img_height)
+        new_width = int(img_width * scale)
+        new_height = int(img_height * scale)
+        x_offset = (canvas_width - new_width) // 2
+        y_offset = (canvas_height - new_height) // 2
+        x1 = int(x_offset + x * scale)
+        y1 = int(y_offset + y * scale)
+        x2 = int(x_offset + (x + w) * scale)
+        y2 = int(y_offset + (y + h) * scale)
+        if self.compare_roi_rect:
+            self.compare_canvas.delete(self.compare_roi_rect)
+        self.compare_roi_rect = self.compare_canvas.create_rectangle(x1, y1, x2, y2, outline='red', width=2)
 
     def display_demosaic(self):
         if self.processor.img is None:
@@ -448,6 +633,77 @@ class PolarizationGUI(tk.Tk):
             self.status_label.config(text=f"Batch calculated for {len(results)} images using {mode}.")
         else:
             self.status_label.config(text="Batch calculation failed.")
+
+    def calculate_compare(self):
+        if not hasattr(self.batch_processor1, 'batch_files') or not self.batch_processor1.batch_files:
+            self.status_label.config(text="Load folder 1 first.")
+            return
+        if not hasattr(self.batch_processor2, 'batch_files') or not self.batch_processor2.batch_files:
+            self.status_label.config(text="Load folder 2 first.")
+            return
+        if self.batch_processor1.batch_roi is None:
+            self.status_label.config(text="Select a ROI on the compare image first.")
+            return
+
+        mode = self.compare_mode_var.get()
+        pol_type = self.compare_pol_var.get()
+        results1 = self.batch_processor1.batch_calculate(mode=mode, pol_type=pol_type)
+        results2 = self.batch_processor2.batch_calculate(mode=mode, pol_type=pol_type)
+        if not results1 or not results2:
+            self.status_label.config(text="Comparison failed: one dataset did not produce any results.")
+            return
+
+        if len(results1) != len(results2):
+            self.status_label.config(text=f"Comparison failed: dataset sizes differ (folder1={len(results1)}, folder2={len(results2)}). Ensure both folders contain the same number of matching images.")
+            return
+
+        self.compare_results = []
+        mismatched_count = 0
+        first_mismatch = None
+        for r1, r2 in zip(results1, results2):
+            # if r1['params'] != r2['params']: #this checks if the photos are the same but in reality they will always be slightly different.
+            #     mismatched_count += 1
+            #     if first_mismatch is None:
+            #         first_mismatch = (r1, r2)
+            #     continue
+            # 
+            if pol_type == 'linear':
+                dolp_diff = float(r1['pol'][0]) - float(r2['pol'][0])
+                aolp1 = float(r1['pol'][1])
+                aolp2 = float(r2['pol'][1])
+                aolp_diff = ((aolp1 - aolp2 + np.pi) % (2 * np.pi)) - np.pi
+                dolp_std_diff = float(r1['dolp_std']) - float(r2['dolp_std'])
+                aolp_std_diff = float(r1['aolp_std']) - float(r2['aolp_std'])
+                self.compare_results.append({
+                    'params': r1['params'],
+                    'dolp_diff': dolp_diff,
+                    'dolp_std_diff': dolp_std_diff,
+                    'aolp_diff': aolp_diff,
+                    'aolp_std_diff': aolp_std_diff,
+                    'sat_diff': float(r1['saturation']) - float(r2['saturation'])
+                })
+            else:
+                docp_diff = float(r1['pol'][0]) - float(r2['pol'][0])
+                docp_std_diff = float(r1['dolp_std']) - float(r2['dolp_std'])
+                self.compare_results.append({
+                    'params': r1['params'],
+                    'docp_diff': docp_diff,
+                    'docp_std_diff': docp_std_diff,
+                    'sat_diff': float(r1['saturation']) - float(r2['saturation'])
+                })
+
+        if self.compare_results:
+            self.update_compare_plots()
+            self.status_label.config(text=f"Comparison calculated for {len(self.compare_results)} matched points ({mismatched_count} mismatches skipped).")
+        else:
+            if mismatched_count == len(results1) and first_mismatch is not None:
+                r1, r2 = first_mismatch
+                self.status_label.config(text=(
+                    f"Comparison failed: same dataset size but no matching image metadata was found. "
+                    f"First mismatch: folder1 params={r1['params']} vs folder2 params={r2['params']}.")
+                )
+            else:
+                self.status_label.config(text="Comparison failed: no matching image metadata found. Check that both folders contain corresponding images with matching parameters.")
 
     def update_plots(self):
         self._clear_plot_canvas('dolp_canvas')
@@ -702,6 +958,140 @@ class PolarizationGUI(tk.Tk):
                 canvas.get_tk_widget().destroy()
         self.batch_plot_canvases.clear()
 
+    def clear_compare_plots(self):
+        for canvas in self.compare_plot_canvases.values():
+            if canvas is not None:
+                canvas.get_tk_widget().destroy()
+        self.compare_plot_canvases.clear()
+
+    def _draw_compare_plot(self, fig, attr_name, row, column):
+        canvas = self.compare_plot_canvases.get(attr_name)
+        if canvas is not None:
+            canvas.get_tk_widget().destroy()
+        canvas = FigureCanvasTkAgg(fig, master=self.compare_grid_frame)
+        canvas.draw()
+        canvas.get_tk_widget().grid(row=row, column=column, sticky='nsew', padx=2, pady=2)
+        self.compare_plot_canvases[attr_name] = canvas
+        plt.close(fig)
+
+    def update_compare_plots(self):
+        self.clear_compare_plots()
+        if not self.compare_results:
+            return
+
+        pol_type = self.compare_pol_var.get()
+        azimuths = np.array([float(r['params']['az']) for r in self.compare_results], dtype=float)
+        zeniths = np.array([float(r['params']['ze']) for r in self.compare_results], dtype=float)
+        mirrored_azimuths = 360 - azimuths
+        azimuths_full = np.concatenate([azimuths, mirrored_azimuths])
+        zeniths_full = np.concatenate([zeniths, zeniths])
+        theta = np.deg2rad(azimuths_full)
+        radii = zeniths_full
+
+        if pol_type == 'linear':
+            dolp_diffs = np.array([r['dolp_diff'] for r in self.compare_results], dtype=float)
+            dolp_std_diffs = np.array([r['dolp_std_diff'] for r in self.compare_results], dtype=float)
+            aolp_diffs = np.array([r['aolp_diff'] for r in self.compare_results], dtype=float)
+            aolp_std_diffs = np.array([r['aolp_std_diff'] for r in self.compare_results], dtype=float)
+            sat_diffs = np.array([r['sat_diff'] for r in self.compare_results], dtype=float)
+
+            dolp_vals = self.mirror_array(dolp_diffs)
+            dolp_std_vals = self.mirror_array(dolp_std_diffs)
+            aolp_vals = self.mirror_array(aolp_diffs)
+            aolp_std_vals = self.mirror_array(aolp_std_diffs)
+            sat_vals = self.mirror_array(sat_diffs)
+
+            fig1, ax1 = plt.subplots(figsize=(3.5, 3.5), subplot_kw={'projection': 'polar'})
+            scatter1 = ax1.scatter(theta, radii, c=dolp_vals, cmap='RdBu', s=20, edgecolors='black', linewidth=0.1)
+            ax1.set_ylim(0, max(radii) * 1.1 if len(radii) > 0 else 90)
+            ax1.set_title('DoLP difference (1 - 2)', fontsize=10, pad=10)
+            fig1.colorbar(scatter1, ax=ax1, fraction=0.046, pad=0.08)
+            self._draw_compare_plot(fig1, 'dolp_diff', row=1, column=0)
+
+            fig2, ax2 = plt.subplots(figsize=(3.5, 3.5), subplot_kw={'projection': 'polar'})
+            scatter2 = ax2.scatter(theta, radii, c=dolp_std_vals, cmap='Purples', s=20, edgecolors='black', linewidth=0.1)
+            ax2.set_ylim(0, max(radii) * 1.1 if len(radii) > 0 else 90)
+            ax2.set_title('DoLP std diff (1 - 2)', fontsize=10, pad=10)
+            fig2.colorbar(scatter2, ax=ax2, fraction=0.046, pad=0.08)
+            self._draw_compare_plot(fig2, 'dolp_std_diff', row=1, column=1)
+
+            fig3, ax3 = plt.subplots(figsize=(3.5, 3.5), subplot_kw={'projection': 'polar'})
+            scatter3 = ax3.scatter(theta, radii, c=sat_vals, cmap='YlGn', s=20, edgecolors='black', linewidth=0.1)
+            ax3.set_ylim(0, max(radii) * 1.1 if len(radii) > 0 else 90)
+            ax3.set_title('Saturation diff (1 - 2)', fontsize=10, pad=10)
+            fig3.colorbar(scatter3, ax=ax3, fraction=0.046, pad=0.08)
+            self._draw_compare_plot(fig3, 'sat_diff', row=1, column=2)
+
+            fig4, ax4 = plt.subplots(figsize=(3.5, 3.5), subplot_kw={'projection': 'polar'})
+            scatter4 = ax4.scatter(theta, radii, c=aolp_vals, cmap='YlGn', s=20, edgecolors='black', linewidth=0.1)
+            ax4.set_ylim(0, max(radii) * 1.1 if len(radii) > 0 else 90)
+            ax4.set_title('AoLP difference (1 - 2)', fontsize=10, pad=10)
+            fig4.colorbar(scatter4, ax=ax4, fraction=0.046, pad=0.08)
+            self._draw_compare_plot(fig4, 'aolp_diff', row=2, column=0)
+
+            fig5, ax5 = plt.subplots(figsize=(3.5, 3.5), subplot_kw={'projection': 'polar'})
+            scatter5 = ax5.scatter(theta, radii, c=aolp_std_vals, cmap='Blues', s=20, edgecolors='black', linewidth=0.1)
+            ax5.set_ylim(0, max(radii) * 1.1 if len(radii) > 0 else 90)
+            ax5.set_title('AoLP std diff (1 - 2)', fontsize=10, pad=10)
+            fig5.colorbar(scatter5, ax=ax5, fraction=0.046, pad=0.08)
+            self._draw_compare_plot(fig5, 'aolp_std_diff', row=2, column=1)
+
+            fig6, ax6 = plt.subplots(figsize=(3.5, 3.5), subplot_kw={'projection': 'polar'})
+            scatter6 = ax6.scatter(theta, radii, c=dolp_vals, cmap='cool', s=20, edgecolors='black', linewidth=0.1)
+            ax6.set_ylim(0, max(radii) * 1.1 if len(radii) > 0 else 90)
+            ax6.set_title('DoLP diff distribution', fontsize=10, pad=10)
+            fig6.colorbar(scatter6, ax=ax6, fraction=0.046, pad=0.08)
+            self._draw_compare_plot(fig6, 'dolp_diff_dist', row=2, column=2)
+
+        else:
+            docp_diffs = np.array([r['docp_diff'] for r in self.compare_results], dtype=float)
+            docp_std_diffs = np.array([r['docp_std_diff'] for r in self.compare_results], dtype=float)
+            sat_diffs = np.array([r['sat_diff'] for r in self.compare_results], dtype=float)
+
+            docp_vals = self.mirror_array(docp_diffs)
+            docp_std_vals = self.mirror_array(docp_std_diffs)
+            sat_vals = self.mirror_array(sat_diffs)
+
+            fig1, ax1 = plt.subplots(figsize=(3.5, 3.5), subplot_kw={'projection': 'polar'})
+            scatter1 = ax1.scatter(theta, radii, c=docp_vals, cmap='RdBu', s=20, edgecolors='black', linewidth=0.1)
+            ax1.set_ylim(0, max(radii) * 1.1 if len(radii) > 0 else 90)
+            ax1.set_title('DoCP difference (1 - 2)', fontsize=10, pad=10)
+            fig1.colorbar(scatter1, ax=ax1, fraction=0.046, pad=0.08)
+            self._draw_compare_plot(fig1, 'docp_diff', row=1, column=0)
+
+            fig2, ax2 = plt.subplots(figsize=(3.5, 3.5), subplot_kw={'projection': 'polar'})
+            scatter2 = ax2.scatter(theta, radii, c=docp_std_vals, cmap='Purples', s=20, edgecolors='black', linewidth=0.1)
+            ax2.set_ylim(0, max(radii) * 1.1 if len(radii) > 0 else 90)
+            ax2.set_title('DoCP std diff (1 - 2)', fontsize=10, pad=10)
+            fig2.colorbar(scatter2, ax=ax2, fraction=0.046, pad=0.08)
+            self._draw_compare_plot(fig2, 'docp_std_diff', row=1, column=1)
+
+            fig3, ax3 = plt.subplots(figsize=(3.5, 3.5), subplot_kw={'projection': 'polar'})
+            scatter3 = ax3.scatter(theta, radii, c=sat_vals, cmap='YlGn', s=20, edgecolors='black', linewidth=0.1)
+            ax3.set_ylim(0, max(radii) * 1.1 if len(radii) > 0 else 90)
+            ax3.set_title('Saturation diff (1 - 2)', fontsize=10, pad=10)
+            fig3.colorbar(scatter3, ax=ax3, fraction=0.046, pad=0.08)
+            self._draw_compare_plot(fig3, 'sat_diff', row=1, column=2)
+
+            # Circular Polarisation Ratio difference for compare
+            with np.errstate(divide='ignore', invalid='ignore'):
+                cpr1 = (1.0 + np.array([r['docp_diff'] for r in self.compare_results], dtype=float)) / (1.0 - np.array([r['docp_diff'] for r in self.compare_results], dtype=float))
+                cpr2 = np.nan_to_num(cpr1, nan=0.0, posinf=np.nanmax(cpr1[np.isfinite(cpr1)]) if np.any(np.isfinite(cpr1)) else 0.0, neginf=0.0)
+            cpr_vals = self.mirror_array(cpr2)
+            finite_mask = np.isfinite(cpr_vals)
+            if np.any(finite_mask):
+                cpr_max = np.nanmax(cpr_vals[finite_mask])
+            else:
+                cpr_max = 1.0
+            cpr_plot_vals = np.clip(np.nan_to_num(cpr_vals, nan=0.0, posinf=cpr_max, neginf=0.0), 0.0, max(10.0, cpr_max))
+
+            fig4, ax4 = plt.subplots(figsize=(3.5, 3.5), subplot_kw={'projection': 'polar'})
+            scatter4 = ax4.scatter(theta, radii, c=cpr_plot_vals, cmap='plasma', s=20, edgecolors='black', linewidth=0.1)
+            ax4.set_ylim(0, max(radii) * 1.1 if len(radii) > 0 else 90)
+            ax4.set_title('Circular Polarisation Ratio diff', fontsize=10, pad=10)
+            fig4.colorbar(scatter4, ax=ax4, fraction=0.046, pad=0.08)
+            self._draw_compare_plot(fig4, 'cpr_diff', row=2, column=0)
+
     def export_csv(self):
         if self.processor.pol_params is None:
             self.status_label.config(text="Calculate polarization first.")
@@ -711,6 +1101,34 @@ class PolarizationGUI(tk.Tk):
             return
         self.processor.export_csv(file_path)
         self.status_label.config(text="Exported to CSV.")
+
+    def export_compare_csv(self):
+        if not self.compare_results:
+            self.status_label.config(text="No comparison results to export.")
+            return
+        file_path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
+        if not file_path:
+            return
+        csv_base = file_path[:-4] if file_path.lower().endswith('.csv') else file_path
+        with open(f"{csv_base}.csv", mode='w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            if self.compare_pol_var.get() == 'linear':
+                writer.writerow(['file', 'az', 'ze', 'cze', 'exp', 'ISO', 'obs', 'DoLP_diff', 'AoLP_diff_deg', 'Sat_diff'])
+                for row in self.compare_results:
+                    params = row['params']
+                    writer.writerow([
+                        params.get('file', ''), params['az'], params['ze'], params['cze'], params['exp'], params['ISO'], params['obs'],
+                        row['dolp_diff'], np.rad2deg(row['aolp_diff']), row['sat_diff']
+                    ])
+            else:
+                writer.writerow(['file', 'az', 'ze', 'cze', 'exp', 'ISO', 'obs', 'DoCP_diff', 'Sat_diff'])
+                for row in self.compare_results:
+                    params = row['params']
+                    writer.writerow([
+                        params.get('file', ''), params['az'], params['ze'], params['cze'], params['exp'], params['ISO'], params['obs'],
+                        row['docp_diff'], row['sat_diff']
+                    ])
+        self.status_label.config(text="Comparison results exported to CSV.")
 
     def export_batch_csv(self):
         if not hasattr(self.processor, 'batch_results') or not self.processor.batch_results:
