@@ -1,5 +1,6 @@
 import os
 import csv
+import time
 import tkinter as tk
 from tkinter import filedialog
 import cv2
@@ -7,7 +8,7 @@ import numpy as np
 from PIL import Image, ImageTk
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-
+import time
 from analysis import PolarizationProcessor
 
 
@@ -15,7 +16,9 @@ class PolarizationGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Polarization Analysis GUI")
-        self.geometry("1200x850")
+        self.default_geometry = "1200x850"
+        self.geometry(self.default_geometry)
+        plt.rcParams["figure.autolayout"] = True
 
         self.processor = PolarizationProcessor()
         self.batch_processor1 = PolarizationProcessor()
@@ -111,6 +114,9 @@ class PolarizationGUI(tk.Tk):
         self.export_csv_btn = tk.Button(self.left_frame, text="Export to CSV", command=self.export_csv)
         self.export_csv_btn.pack(fill=tk.X, pady=4)
 
+        self.export_png_btn = tk.Button(self.left_frame, text="Export Graphs as PNG", command=self.export_single_png)
+        self.export_png_btn.pack(fill=tk.X, pady=4)
+
         self.canvas = tk.Canvas(self.grid_frame, bg="black")
         self.canvas.grid(row=0, column=0, sticky='nsew', padx=2, pady=2)
         self.canvas.bind('<Configure>', lambda event: self.resize_image())
@@ -121,6 +127,7 @@ class PolarizationGUI(tk.Tk):
         self.dolp_canvas = None
         self.aolp_canvas = None
         self.hist_canvas = None
+        self.single_plot_figures = {}
 
     def _create_batch_page(self):
         self.batch_left_frame = tk.Frame(self.page2_frame)
@@ -157,6 +164,9 @@ class PolarizationGUI(tk.Tk):
         self.batch_export_csv_btn = tk.Button(self.batch_left_frame, text="Export Batch CSV", command=self.export_batch_csv)
         self.batch_export_csv_btn.pack(fill=tk.X, pady=4)
 
+        self.batch_export_png_btn = tk.Button(self.batch_left_frame, text="Export Graphs as PNG", command=self.export_batch_png)
+        self.batch_export_png_btn.pack(fill=tk.X, pady=4)
+
         self.batch_canvas = tk.Canvas(self.batch_grid_frame, bg="black")
         self.batch_canvas.grid(row=0, column=0, columnspan=3, sticky='nsew', padx=2, pady=2)
         self.batch_canvas.bind('<Configure>', lambda event: self.resize_batch_image())
@@ -165,6 +175,7 @@ class PolarizationGUI(tk.Tk):
         self.batch_canvas.bind('<ButtonRelease-1>', self.batch_on_mouse_release)
 
         self.batch_plot_canvases = {}
+        self.batch_plot_figures = {}
 
     def _create_compare_page(self):
         self.compare_left_frame = tk.Frame(self.page3_frame)
@@ -205,6 +216,9 @@ class PolarizationGUI(tk.Tk):
         self.compare_export_csv_btn = tk.Button(self.compare_left_frame, text="Export Compare CSV", command=self.export_compare_csv)
         self.compare_export_csv_btn.pack(fill=tk.X, pady=4)
 
+        self.compare_export_png_btn = tk.Button(self.compare_left_frame, text="Export Graphs as PNG", command=self.export_compare_png)
+        self.compare_export_png_btn.pack(fill=tk.X, pady=4)
+
         self.compare_canvas = tk.Canvas(self.compare_grid_frame, bg="black")
         self.compare_canvas.grid(row=0, column=0, columnspan=3, sticky='nsew', padx=2, pady=2)
         self.compare_canvas.bind('<Configure>', lambda event: self.resize_compare_image())
@@ -213,6 +227,7 @@ class PolarizationGUI(tk.Tk):
         self.compare_canvas.bind('<ButtonRelease-1>', self.compare_on_mouse_release)
 
         self.compare_plot_canvases = {}
+        self.compare_plot_figures = {}
 
     def show_single_page(self):
         self.page_active = 'single'
@@ -915,7 +930,18 @@ class PolarizationGUI(tk.Tk):
             fig4.colorbar(scatter4, ax=ax4, fraction=0.046, pad=0.08)
             self._draw_batch_plot(fig4, 'cpr', row=2, column=0)
 
+    def _redraw_canvas(self, canvas):
+        if canvas is None:
+            return
+        try:
+            canvas.draw_idle()
+            canvas.get_tk_widget().update_idletasks()
+        except Exception:
+            pass
+
     def _draw_plot(self, fig, attr_name, row, column):
+        fig.tight_layout(pad=1.5)
+        fig.subplots_adjust(left=0.08, right=0.96, top=0.90, bottom=0.12)
         canvas = getattr(self, attr_name)
         if canvas is not None:
             canvas.get_tk_widget().destroy()
@@ -923,6 +949,8 @@ class PolarizationGUI(tk.Tk):
         canvas.draw()
         canvas.get_tk_widget().grid(row=row, column=column, sticky='nsew', padx=2, pady=2)
         setattr(self, attr_name, canvas)
+        self.single_plot_figures[attr_name] = fig
+        self._redraw_canvas(canvas)
         plt.close(fig)
 
     def _clear_plot_canvas(self, attr_name):
@@ -937,6 +965,8 @@ class PolarizationGUI(tk.Tk):
         self._clear_plot_canvas('hist_canvas')
 
     def _draw_batch_plot(self, fig, attr_name, row, column):
+        fig.tight_layout(pad=1.5)
+        fig.subplots_adjust(left=0.15, right=0.75, top=0.80, bottom=0.12)
         canvas = self.batch_plot_canvases.get(attr_name)
         if canvas is not None:
             canvas.get_tk_widget().destroy()
@@ -944,6 +974,8 @@ class PolarizationGUI(tk.Tk):
         canvas.draw()
         canvas.get_tk_widget().grid(row=row, column=column, sticky='nsew', padx=2, pady=2)
         self.batch_plot_canvases[attr_name] = canvas
+        self.batch_plot_figures[attr_name] = fig
+        self._redraw_canvas(canvas)
         plt.close(fig)
 
     def _clear_batch_plot_canvas(self, attr_name):
@@ -965,6 +997,8 @@ class PolarizationGUI(tk.Tk):
         self.compare_plot_canvases.clear()
 
     def _draw_compare_plot(self, fig, attr_name, row, column):
+        fig.tight_layout(pad=1.5)
+        fig.subplots_adjust(left=0.15, right=0.75, top=0.80, bottom=0.12)
         canvas = self.compare_plot_canvases.get(attr_name)
         if canvas is not None:
             canvas.get_tk_widget().destroy()
@@ -972,6 +1006,8 @@ class PolarizationGUI(tk.Tk):
         canvas.draw()
         canvas.get_tk_widget().grid(row=row, column=column, sticky='nsew', padx=2, pady=2)
         self.compare_plot_canvases[attr_name] = canvas
+        self.compare_plot_figures[attr_name] = fig
+        self._redraw_canvas(canvas)
         plt.close(fig)
 
     def update_compare_plots(self):
@@ -1091,6 +1127,47 @@ class PolarizationGUI(tk.Tk):
             ax4.set_title('Circular Polarisation Ratio diff', fontsize=10, pad=10)
             fig4.colorbar(scatter4, ax=ax4, fraction=0.046, pad=0.08)
             self._draw_compare_plot(fig4, 'cpr_diff', row=2, column=0)
+
+    def _export_plot_figures_png(self, plot_figures, page_name):
+        self.geometry(self.default_geometry)
+        self.update_idletasks()
+
+        if not plot_figures:
+            self.status_label.config(text=f"No {page_name} graphs to export.")
+            return
+
+        folder = filedialog.askdirectory(title=f"Select folder to save {page_name} PNG files")
+        if not folder:
+            return
+
+
+        all_canvases = list(self.batch_plot_canvases.values()) + list(self.compare_plot_canvases.values())
+        all_canvases += [getattr(self, 'dolp_canvas', None), getattr(self, 'aolp_canvas', None), getattr(self, 'hist_canvas', None)]
+        for canvas in all_canvases:
+            self._redraw_canvas(canvas)
+
+        try:
+            for name, fig in plot_figures.items():
+                if fig is None:
+                    continue
+                fig.tight_layout(pad=1.5)
+                fig.subplots_adjust(left=0.08, right=0.96, top=0.90, bottom=0.12)
+                safe_name = name.replace(' ', '_')
+                output_path = os.path.join(folder, f"{page_name}_{safe_name}.png")
+                fig.savefig(output_path, dpi=200, bbox_inches='tight', facecolor='white')
+        finally:
+            self.update_idletasks()
+
+        self.status_label.config(text=f"Exported {len(plot_figures)} {page_name} graph(s) to PNG.")
+
+    def export_single_png(self):
+        self._export_plot_figures_png(self.single_plot_figures, 'single')
+
+    def export_batch_png(self):
+        self._export_plot_figures_png(self.batch_plot_figures, 'batch')
+
+    def export_compare_png(self):
+        self._export_plot_figures_png(self.compare_plot_figures, 'compare')
 
     def export_csv(self):
         if self.processor.pol_params is None:
