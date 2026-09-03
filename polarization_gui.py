@@ -584,6 +584,14 @@ class PolarizationGUI(tk.Tk):
         fig.colorbar(scatter, ax=ax, fraction=0.046, pad=0.08)
         return fig
 
+    def _get_plot_colormap(self, cmap_name):
+        return plt.get_cmap(cmap_name) if isinstance(cmap_name, str) else cmap_name
+
+    def _make_custom_colormap(self, low_color, middle_color, high_color):
+        return mcolors.LinearSegmentedColormap.from_list(
+            'custom', [low_color, middle_color, high_color], N=256
+        )
+
     def display_demosaic(self):
         if self.processor.img is None:
             self.status_label.config(text="Load an image first.")
@@ -697,7 +705,10 @@ class PolarizationGUI(tk.Tk):
             #     continue
             # 
             if pol_type == 'linear':
-                dolp_diff = float(r1['pol'][0]) - float(r2['pol'][0])
+                dolp1 = float(r1['pol'][0])*100
+                dolp2 = float(r2['pol'][0])*100
+                dolp_diff = (dolp1 - dolp2)
+
                 aolp1 = float(r1['pol'][1])
                 aolp2 = float(r2['pol'][1])
                 aolp_diff = ((aolp1 - aolp2 + np.pi) % (2 * np.pi)) - np.pi
@@ -823,7 +834,7 @@ class PolarizationGUI(tk.Tk):
 
 
         if pol_type == 'linear':
-            dolp_vals = np.array([float(r['pol'][0]) for r in results], dtype=float)
+            dolp_vals = np.array([(float(r['pol'][0])*100) for r in results], dtype=float)
             dolp_vals = self.mirror_array(dolp_vals)
 
             aolp_vals = np.array([float(r['pol'][1]) for r in results], dtype=float)
@@ -1052,11 +1063,14 @@ class PolarizationGUI(tk.Tk):
         plot_frame = tk.Frame(win)
         plot_frame.pack(fill=tk.BOTH, expand=True)
 
-        # initial colormap built from stored low/high
+        cmap_name = meta.get('cmap', 'viridis')
         try:
-            cmap_obj = mcolors.LinearSegmentedColormap.from_list('custom', [low_init, high_init], N=256)
+            original_cmap = self._get_plot_colormap(cmap_name)
+            middle_init = meta.get('middle_color', mcolors.to_hex(original_cmap(0.5)))
+            cmap_obj = original_cmap
         except Exception:
-            cmap_obj = meta.get('cmap', 'viridis')
+            middle_init = meta.get('middle_color', '#ffffff')
+            cmap_obj = self._make_custom_colormap(low_init, middle_init, high_init)
 
         fig = self._make_polar_scatter_fig(theta, radii, values, cmap=cmap_obj, title=title, vmin=vmin, vmax=vmax)
         canvas = FigureCanvasTkAgg(fig, master=plot_frame)
@@ -1068,6 +1082,7 @@ class PolarizationGUI(tk.Tk):
 
         # Color pickers
         low_color_var = tk.StringVar(value=low_init)
+        middle_color_var = tk.StringVar(value=middle_init)
         high_color_var = tk.StringVar(value=high_init)
 
         def pick_low():
@@ -1075,7 +1090,16 @@ class PolarizationGUI(tk.Tk):
             if c and c[1]:
                 low_color_var.set(c[1])
                 try:
-                    range_slider.update_colors(low_color_var.get(), high_color_var.get())
+                    range_slider.update_colors(low_color_var.get(), middle_color_var.get(), high_color_var.get())
+                except Exception:
+                    pass
+
+        def pick_middle():
+            c = colorchooser.askcolor(color=middle_color_var.get(), parent=win)
+            if c and c[1]:
+                middle_color_var.set(c[1])
+                try:
+                    range_slider.update_colors(low_color_var.get(), middle_color_var.get(), high_color_var.get())
                 except Exception:
                     pass
 
@@ -1084,24 +1108,27 @@ class PolarizationGUI(tk.Tk):
             if c and c[1]:
                 high_color_var.set(c[1])
                 try:
-                    range_slider.update_colors(low_color_var.get(), high_color_var.get())
+                    range_slider.update_colors(low_color_var.get(), middle_color_var.get(), high_color_var.get())
                 except Exception:
                     pass
 
         tk.Button(controls_frame, text='Pick Low Color', command=pick_low).grid(row=0, column=0, padx=4)
         tk.Label(controls_frame, textvariable=low_color_var).grid(row=0, column=1, padx=4)
-        tk.Button(controls_frame, text='Pick High Color', command=pick_high).grid(row=0, column=2, padx=4)
-        tk.Label(controls_frame, textvariable=high_color_var).grid(row=0, column=3, padx=4)
+        tk.Button(controls_frame, text='Pick Middle Color', command=pick_middle).grid(row=0, column=2, padx=4)
+        tk.Label(controls_frame, textvariable=middle_color_var).grid(row=0, column=3, padx=4)
+        tk.Button(controls_frame, text='Pick High Color', command=pick_high).grid(row=0, column=4, padx=4)
+        tk.Label(controls_frame, textvariable=high_color_var).grid(row=0, column=5, padx=4)
 
         # vmin/vmax dual-handle gradient slider (more user-friendly)
         class RangeSlider(tk.Frame):
-            def __init__(self, master, data_min, data_max, low_color, high_color, width=360, height=28, on_change=None, **kwargs):
+            def __init__(self, master, data_min, data_max, low_color, middle_color, high_color, width=360, height=28, on_change=None, **kwargs):
                 super().__init__(master, **kwargs)
                 self.width = width
                 self.height = height
                 self.data_min = float(data_min)
                 self.data_max = float(data_max)
                 self.low_color = low_color
+                self.middle_color = middle_color
                 self.high_color = high_color
                 self.on_change = on_change
                 self.canvas = tk.Canvas(self, width=self.width, height=self.height)
@@ -1131,10 +1158,16 @@ class PolarizationGUI(tk.Tk):
                 self.canvas.delete('grad')
                 steps = 180
                 low_rgb = np.array(mcolors.to_rgb(self.low_color), dtype=float)
+                middle_rgb = np.array(mcolors.to_rgb(self.middle_color), dtype=float)
                 high_rgb = np.array(mcolors.to_rgb(self.high_color), dtype=float)
                 for i in range(steps):
                     t = i / (steps - 1)
-                    col_rgb = low_rgb * (1.0 - t) + high_rgb * t
+                    if t <= 0.5:
+                        local_t = t * 2.0
+                        col_rgb = low_rgb * (1.0 - local_t) + middle_rgb * local_t
+                    else:
+                        local_t = (t - 0.5) * 2.0
+                        col_rgb = middle_rgb * (1.0 - local_t) + high_rgb * local_t
                     col = mcolors.to_hex(col_rgb)
                     x1 = int(2 + i * (self.width - 4) / steps)
                     x2 = int(2 + (i + 1) * (self.width - 4) / steps)
@@ -1181,6 +1214,12 @@ class PolarizationGUI(tk.Tk):
                 # clamp
                 vmin_val = max(self.data_min, min(self.data_max, float(vmin_val)))
                 vmax_val = max(self.data_min, min(self.data_max, float(vmax_val)))
+                if self.data_max == self.data_min:
+                    self.left_x = self.right_x = (self.width - 1) // 2
+                    self.canvas.coords(self.left_handle, self.left_x - 6, self.height/2 - 8, self.left_x + 6, self.height/2 + 8)
+                    self.canvas.coords(self.right_handle, self.right_x - 6, self.height/2 - 8, self.right_x + 6, self.height/2 + 8)
+                    self._update_labels()
+                    return
                 if vmax_val <= vmin_val:
                     vmax_val = min(self.data_max, vmin_val + 1e-9)
                 left_rel = (vmin_val - self.data_min) / (self.data_max - self.data_min)
@@ -1193,35 +1232,38 @@ class PolarizationGUI(tk.Tk):
 
             def get(self):
                 # map pixel positions to data range
+                if self.data_max == self.data_min:
+                    return (self.data_min, self.data_max)
                 left_rel = (self.left_x - 4) / (self.width - 8)
                 right_rel = (self.right_x - 4) / (self.width - 8)
                 vmin_val = self.data_min + left_rel * (self.data_max - self.data_min)
                 vmax_val = self.data_min + right_rel * (self.data_max - self.data_min)
                 return (vmin_val, vmax_val)
 
-            def update_colors(self, low_color, high_color):
+            def update_colors(self, low_color, middle_color, high_color):
                 self.low_color = low_color
+                self.middle_color = middle_color
                 self.high_color = high_color
                 self._draw_gradient()
 
-        pad = max(abs(vmax - vmin) * 0.1, 1e-9)
-        slider_min = vmin - pad
-        slider_max = vmax + pad
-        range_slider = RangeSlider(controls_frame, data_min=slider_min, data_max=slider_max, low_color=low_color_var.get(), high_color=high_color_var.get())
+        finite_values = values[np.isfinite(values)]
+        slider_min = float(np.min(finite_values)) if finite_values.size else 0.0
+        slider_max = float(np.max(finite_values)) if finite_values.size else 1.0
+        range_slider = RangeSlider(controls_frame, data_min=slider_min, data_max=slider_max, low_color=low_color_var.get(), middle_color=middle_color_var.get(), high_color=high_color_var.get())
         # set initial handles to reflect current vmin/vmax
         try:
             range_slider.set_range(vmin, vmax)
         except Exception:
             pass
-        range_slider.grid(row=1, column=0, columnspan=4, pady=6)
-        # Add numeric Spinboxes for numeric control of min/max (more compact than scales)
+        range_slider.grid(row=1, column=0, columnspan=6, pady=6)
+        # Numeric entries can intentionally extend beyond the data range.
         span = slider_max - slider_min if slider_max - slider_min != 0 else 1.0
-        step = span / 500.0
+        step = span / 500.0 if span else 1.0
         min_var = tk.DoubleVar(value=vmin)
         max_var = tk.DoubleVar(value=vmax)
 
-        min_box = tk.Spinbox(controls_frame, textvariable=min_var, from_=slider_min, to=slider_max, increment=step, width=12)
-        max_box = tk.Spinbox(controls_frame, textvariable=max_var, from_=slider_min, to=slider_max, increment=step, width=12)
+        min_box = tk.Entry(controls_frame, textvariable=min_var, width=12)
+        max_box = tk.Entry(controls_frame, textvariable=max_var, width=12)
         tk.Label(controls_frame, text='Global min:').grid(row=2, column=0, sticky='e')
         min_box.grid(row=2, column=1, sticky='w', padx=4)
         tk.Label(controls_frame, text='Global max:').grid(row=2, column=2, sticky='e')
@@ -1232,11 +1274,18 @@ class PolarizationGUI(tk.Tk):
                 lv = float(min_var.get())
                 hv = float(max_var.get())
                 if hv <= lv:
-                    hv = lv + 1e-9
-                    max_var.set(hv)
-                range_slider.set_range(lv, hv)
+                    return
+                if slider_min <= lv <= slider_max and slider_min <= hv <= slider_max:
+                    range_slider.set_range(lv, hv)
             except Exception:
                 pass
+
+        def get_typed_range():
+            lv = float(min_var.get())
+            hv = float(max_var.get())
+            if hv <= lv:
+                raise ValueError('Maximum must be greater than minimum.')
+            return lv, hv
 
         def slider_to_boxes(lv, hv):
             try:
@@ -1261,13 +1310,17 @@ class PolarizationGUI(tk.Tk):
 
         def apply_changes():
             low = low_color_var.get()
+            middle = middle_color_var.get()
             high = high_color_var.get()
-            vmin_new, vmax_new = range_slider.get()
+            try:
+                vmin_new, vmax_new = get_typed_range()
+            except ValueError:
+                return
             # build colormap
-            cmap = mcolors.LinearSegmentedColormap.from_list('custom', [low, high], N=256)
+            cmap = self._make_custom_colormap(low, middle, high)
             # update gradient on slider to reflect new colors
             try:
-                range_slider.update_colors(low, high)
+                range_slider.update_colors(low, middle, high)
             except Exception:
                 pass
 
@@ -1291,7 +1344,7 @@ class PolarizationGUI(tk.Tk):
                 pass
 
             # persist metadata
-            meta_new = {'low_color': low, 'high_color': high, 'vmin': float(vmin_new), 'vmax': float(vmax_new), 'cmap': 'custom', 'pos': meta.get('pos', (1,0))}
+            meta_new = {'low_color': low, 'middle_color': middle, 'high_color': high, 'vmin': float(vmin_new), 'vmax': float(vmax_new), 'cmap': 'custom', 'pos': meta.get('pos', (1,0))}
             data_store[attr_name] = (theta, radii, values, title, meta_new)
 
             # update stored figure and redraw in main UI without stealing focus
@@ -1333,11 +1386,12 @@ class PolarizationGUI(tk.Tk):
             # persist current slider/colors to main UI even if user didn't click Apply
             try:
                 low = low_color_var.get()
+                middle = middle_color_var.get()
                 high = high_color_var.get()
-                vmin_new, vmax_new = range_slider.get()
-                cmap = mcolors.LinearSegmentedColormap.from_list('custom', [low, high], N=256)
+                vmin_new, vmax_new = get_typed_range()
+                cmap = self._make_custom_colormap(low, middle, high)
                 new_fig = self._make_polar_scatter_fig(theta, radii, values, cmap=cmap, title=title, vmin=vmin_new, vmax=vmax_new)
-                meta_new = {'low_color': low, 'high_color': high, 'vmin': float(vmin_new), 'vmax': float(vmax_new), 'cmap': 'custom', 'pos': meta.get('pos', (1,0))}
+                meta_new = {'low_color': low, 'middle_color': middle, 'high_color': high, 'vmin': float(vmin_new), 'vmax': float(vmax_new), 'cmap': 'custom', 'pos': meta.get('pos', (1,0))}
                 data_store[attr_name] = (theta, radii, values, title, meta_new)
                 fig_store[attr_name] = new_fig
                 if page == 'batch':
