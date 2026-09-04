@@ -24,6 +24,11 @@ class PolarizationGUI(tk.Tk):
         self.processor = PolarizationProcessor()
         self.batch_processor1 = PolarizationProcessor()
         self.batch_processor2 = PolarizationProcessor()
+        # Triple compare processors
+        self.triple_processor1 = PolarizationProcessor()
+        self.triple_processor2 = PolarizationProcessor()
+        self.triple_processor3 = PolarizationProcessor()
+        
         self.roi_start = None
         self.roi_rect = None
         self.batch_roi_start = None
@@ -32,12 +37,24 @@ class PolarizationGUI(tk.Tk):
         self.compare_roi_rect = None
         self.compare_processor_image = None
         self.compare_results = []
+        
+        # Triple compare state
+        self.triple_roi_start = None
+        self.triple_roi_rect = None
+        self.triple_processor_image = None
+        self.triple_results = {}  # {'P1-P2': [], 'P1-P3': [], 'P2-P3': []}
+        self.triple_plot_index = 0  # Current plot type being displayed (0-5)
 
+        # Datapoint size controls for all pages
+        self.batch_point_size = tk.IntVar(value=20)
+        self.compare_point_size = tk.IntVar(value=20)
+        self.triple_point_size = tk.IntVar(value=20)
         self.page_buttons_frame = tk.Frame(self)
         self.page_buttons_frame.pack(fill=tk.X, padx=8, pady=4)
         tk.Button(self.page_buttons_frame, text="Single Image", command=self.show_single_page).pack(side=tk.LEFT, padx=4)
         tk.Button(self.page_buttons_frame, text="Batch Folder", command=self.show_batch_page).pack(side=tk.LEFT, padx=4)
         tk.Button(self.page_buttons_frame, text="Batch Compare", command=self.show_compare_page).pack(side=tk.LEFT, padx=4)
+        tk.Button(self.page_buttons_frame, text="Triple Compare", command=self.show_triple_compare_page).pack(side=tk.LEFT, padx=4)
 
         self.main_frame = tk.Frame(self)
         self.main_frame.pack(fill=tk.BOTH, expand=True)
@@ -45,6 +62,7 @@ class PolarizationGUI(tk.Tk):
         self.page1_frame = tk.Frame(self.main_frame)
         self.page2_frame = tk.Frame(self.main_frame)
         self.page3_frame = tk.Frame(self.main_frame)
+        self.page4_frame = tk.Frame(self.main_frame)
 
         self.status_label = tk.Label(self, text="Load an image to start", anchor="w")
         self.status_label.pack(fill=tk.X, padx=8, pady=4)
@@ -52,6 +70,7 @@ class PolarizationGUI(tk.Tk):
         self._create_single_page()
         self._create_batch_page()
         self._create_compare_page()
+        self._create_triple_compare_page()
 
         self.show_single_page()
 
@@ -168,6 +187,10 @@ class PolarizationGUI(tk.Tk):
         self.batch_export_png_btn = tk.Button(self.batch_left_frame, text="Export Graphs as PNG", command=self.export_batch_png)
         self.batch_export_png_btn.pack(fill=tk.X, pady=4)
 
+        tk.Label(self.batch_left_frame, text="Datapoint Size:").pack(pady=(12, 2), anchor="w")
+        batch_size_scale = tk.Scale(self.batch_left_frame, from_=1, to=100, orient=tk.HORIZONTAL, variable=self.batch_point_size, command=lambda v: self.update_batch_plots())
+        batch_size_scale.pack(fill=tk.X, pady=4)
+
         self.batch_canvas = tk.Canvas(self.batch_grid_frame, bg="black")
         self.batch_canvas.grid(row=0, column=0, columnspan=3, sticky='nsew', padx=2, pady=2)
         self.batch_canvas.bind('<Configure>', lambda event: self.resize_batch_image())
@@ -221,6 +244,10 @@ class PolarizationGUI(tk.Tk):
         self.compare_export_png_btn = tk.Button(self.compare_left_frame, text="Export Graphs as PNG", command=self.export_compare_png)
         self.compare_export_png_btn.pack(fill=tk.X, pady=4)
 
+        tk.Label(self.compare_left_frame, text="Datapoint Size:").pack(pady=(12, 2), anchor="w")
+        compare_size_scale = tk.Scale(self.compare_left_frame, from_=1, to=100, orient=tk.HORIZONTAL, variable=self.compare_point_size, command=lambda v: self.update_compare_plots())
+        compare_size_scale.pack(fill=tk.X, pady=4)
+
         self.compare_canvas = tk.Canvas(self.compare_grid_frame, bg="black")
         self.compare_canvas.grid(row=0, column=0, columnspan=3, sticky='nsew', padx=2, pady=2)
         self.compare_canvas.bind('<Configure>', lambda event: self.resize_compare_image())
@@ -252,14 +279,105 @@ class PolarizationGUI(tk.Tk):
         self.page_active = 'compare'
         self.page1_frame.pack_forget()
         self.page2_frame.pack_forget()
-        self.page3_frame.pack(fill=tk.BOTH, expand=True)
+        self.page4_frame.pack_forget()
+        if self.page_active == 'compare':
+            self.page3_frame.pack(fill=tk.BOTH, expand=True)
         self.status_label.config(text="Batch comparison page active")
+
+    def show_triple_compare_page(self):
+        self.page_active = 'triple_compare'
+        self.page1_frame.pack_forget()
+        self.page2_frame.pack_forget()
+        self.page3_frame.pack_forget()
+        self.page4_frame.pack(fill=tk.BOTH, expand=True)
+        self.status_label.config(text="Triple comparison page active")
 
     def update_filter_params(self, value):
         if value == "Gaussian Blur":
             self.params_frame.pack(fill=tk.X, pady=4)
         else:
             self.params_frame.pack_forget()
+
+    def _create_triple_compare_page(self):
+        self.triple_left_frame = tk.Frame(self.page4_frame)
+        self.triple_left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=8)
+
+        self.triple_grid_frame = tk.Frame(self.page4_frame)
+        self.triple_grid_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=8, pady=8)
+        self.triple_grid_frame.grid_rowconfigure(0, weight=1)
+        self.triple_grid_frame.grid_rowconfigure(1, weight=1)
+        self.triple_grid_frame.grid_columnconfigure(0, weight=1)
+        self.triple_grid_frame.grid_columnconfigure(1, weight=1)
+
+        # Folder loading buttons
+        self.triple_load_btn1 = tk.Button(self.triple_left_frame, text="Load Folder 1", command=self.load_triple_folder1)
+        self.triple_load_btn1.pack(fill=tk.X, pady=4)
+        self.triple_folder_label1 = tk.Label(self.triple_left_frame, text="No folder 1 loaded", anchor="w", justify="left", wraplength=200)
+        self.triple_folder_label1.pack(fill=tk.X, pady=4)
+
+        self.triple_load_btn2 = tk.Button(self.triple_left_frame, text="Load Folder 2", command=self.load_triple_folder2)
+        self.triple_load_btn2.pack(fill=tk.X, pady=4)
+        self.triple_folder_label2 = tk.Label(self.triple_left_frame, text="No folder 2 loaded", anchor="w", justify="left", wraplength=200)
+        self.triple_folder_label2.pack(fill=tk.X, pady=4)
+
+        self.triple_load_btn3 = tk.Button(self.triple_left_frame, text="Load Folder 3", command=self.load_triple_folder3)
+        self.triple_load_btn3.pack(fill=tk.X, pady=4)
+        self.triple_folder_label3 = tk.Label(self.triple_left_frame, text="No folder 3 loaded", anchor="w", justify="left", wraplength=200)
+        self.triple_folder_label3.pack(fill=tk.X, pady=4)
+
+        # Mode and polarization options
+        self.triple_mode_var = tk.StringVar(value="mean")
+        tk.Label(self.triple_left_frame, text="Comparison mode:").pack(pady=(12, 2), anchor="w")
+        self.triple_mode_menu = tk.OptionMenu(self.triple_left_frame, self.triple_mode_var, "mean", "median", "stokes_mean")
+        self.triple_mode_menu.pack(fill=tk.X, pady=2)
+
+        self.triple_pol_var = tk.StringVar(value="linear")
+        tk.Label(self.triple_left_frame, text="Polarization Type:").pack(pady=(12, 2), anchor="w")
+        tk.Radiobutton(self.triple_left_frame, text="Linear", variable=self.triple_pol_var, value="linear").pack(anchor="w")
+        tk.Radiobutton(self.triple_left_frame, text="Circular", variable=self.triple_pol_var, value="circular").pack(anchor="w")
+
+        # Calculate button
+        self.triple_calculate_btn = tk.Button(self.triple_left_frame, text="Calculate Triple Compare", command=self.calculate_triple_compare)
+        self.triple_calculate_btn.pack(fill=tk.X, pady=12)
+
+        # Export buttons
+        self.triple_export_csv_btn = tk.Button(self.triple_left_frame, text="Export Triple CSV", command=self.export_triple_csv)
+        self.triple_export_csv_btn.pack(fill=tk.X, pady=4)
+
+        self.triple_export_png_btn = tk.Button(self.triple_left_frame, text="Export Graphs as PNG", command=self.export_triple_png)
+        self.triple_export_png_btn.pack(fill=tk.X, pady=4)
+
+        tk.Label(self.triple_left_frame, text="Datapoint Size:").pack(pady=(12, 2), anchor="w")
+        triple_size_scale = tk.Scale(self.triple_left_frame, from_=1, to=100, orient=tk.HORIZONTAL, variable=self.triple_point_size, command=lambda v: self.update_triple_plots())
+        triple_size_scale.pack(fill=tk.X, pady=4)
+
+        # Navigation frame with arrows (moved below export buttons)
+        self.triple_nav_frame = tk.Frame(self.triple_left_frame)
+        self.triple_nav_frame.pack(fill=tk.X, pady=8)
+
+        self.triple_left_arrow_btn = tk.Button(self.triple_nav_frame, text="< Previous", command=self.triple_prev_plot)
+        self.triple_left_arrow_btn.pack(side=tk.LEFT, padx=2)
+
+        self.triple_plot_type_label = tk.Label(self.triple_nav_frame, text="Plot Type: 1/6", width=15)
+        self.triple_plot_type_label.pack(side=tk.LEFT, padx=4)
+
+        self.triple_right_arrow_btn = tk.Button(self.triple_nav_frame, text="Next >", command=self.triple_next_plot)
+        self.triple_right_arrow_btn.pack(side=tk.LEFT, padx=2)
+
+        # Image canvas
+        self.triple_canvas = tk.Canvas(self.triple_grid_frame, bg="black")
+        self.triple_canvas.grid(row=0, column=0, columnspan=2, sticky='nsew', padx=2, pady=2)
+        self.triple_canvas.bind('<Configure>', lambda event: self.resize_triple_image())
+        self.triple_canvas.bind('<ButtonPress-1>', self.triple_on_mouse_press)
+        self.triple_canvas.bind('<B1-Motion>', self.triple_on_mouse_drag)
+        self.triple_canvas.bind('<ButtonRelease-1>', self.triple_on_mouse_release)
+
+        # Plot storage
+        self.triple_plot_canvases = {}
+        self.triple_plot_figures = {}
+        self.triple_plot_data = {}
+        self.triple_plot_index = 0
+
 
     def load_image(self):
         file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.png *.jpg *.jpeg *.bmp")])
@@ -328,6 +446,58 @@ class PolarizationGUI(tk.Tk):
             self.status_label.config(text="Folder 2 loaded. Drag on the compare image to select ROI.")
         else:
             self.status_label.config(text="Failed to load folder 2 or no valid images found.")
+
+    def load_triple_folder1(self):
+        folder_path = filedialog.askdirectory()
+        if not folder_path:
+            return
+        success = self.triple_processor1.load_folder(folder_path)
+        if success:
+            self.triple_folder_label1.config(text=f"Loaded {len(self.triple_processor1.batch_files)} images\n{folder_path}")
+            self.triple_processor_image = self.triple_processor1.batch_first_img.copy()
+            self.triple_roi_start = None
+            self.triple_roi_rect = None
+            self.triple_processor1.batch_roi = None
+            self.triple_processor1.roi = None
+            self.resize_triple_image()
+            self.clear_triple_plots()
+            self.status_label.config(text="Folder 1 loaded. Drag on the image to select ROI.")
+        else:
+            self.status_label.config(text="Failed to load folder 1 or no valid images found.")
+
+    def load_triple_folder2(self):
+        folder_path = filedialog.askdirectory()
+        if not folder_path:
+            return
+        success = self.triple_processor2.load_folder(folder_path)
+        if success:
+            self.triple_folder_label2.config(text=f"Loaded {len(self.triple_processor2.batch_files)} images\n{folder_path}")
+            if not hasattr(self, 'triple_processor_image') or self.triple_processor_image is None:
+                self.triple_processor_image = self.triple_processor2.batch_first_img.copy()
+                self.resize_triple_image()
+            self.triple_processor2.batch_roi = None
+            self.triple_processor2.roi = None
+            self.clear_triple_plots()
+            self.status_label.config(text="Folder 2 loaded. Drag on the image to select ROI.")
+        else:
+            self.status_label.config(text="Failed to load folder 2 or no valid images found.")
+
+    def load_triple_folder3(self):
+        folder_path = filedialog.askdirectory()
+        if not folder_path:
+            return
+        success = self.triple_processor3.load_folder(folder_path)
+        if success:
+            self.triple_folder_label3.config(text=f"Loaded {len(self.triple_processor3.batch_files)} images\n{folder_path}")
+            if not hasattr(self, 'triple_processor_image') or self.triple_processor_image is None:
+                self.triple_processor_image = self.triple_processor3.batch_first_img.copy()
+                self.resize_triple_image()
+            self.triple_processor3.batch_roi = None
+            self.triple_processor3.roi = None
+            self.clear_triple_plots()
+            self.status_label.config(text="Folder 3 loaded. Drag on the image to select ROI.")
+        else:
+            self.status_label.config(text="Failed to load folder 3 or no valid images found.")
 
     def on_mouse_press(self, event):
         if self.processor.original_img is None:
@@ -414,6 +584,36 @@ class PolarizationGUI(tk.Tk):
         self.batch_processor2.batch_set_roi(image_roi)
         self.status_label.config(text=f"Comparison ROI selected: {tuple(map(int, image_roi))}")
 
+    def triple_on_mouse_press(self, event):
+        if self.triple_processor_image is None:
+            return
+        self.triple_roi_start = (event.x, event.y)
+        if self.triple_roi_rect:
+            self.triple_canvas.delete(self.triple_roi_rect)
+            self.triple_roi_rect = None
+
+    def triple_on_mouse_drag(self, event):
+        if self.triple_roi_start is None:
+            return
+        if self.triple_roi_rect:
+            self.triple_canvas.delete(self.triple_roi_rect)
+        x1, y1 = self.triple_roi_start
+        x2, y2 = event.x, event.y
+        self.triple_roi_rect = self.triple_canvas.create_rectangle(x1, y1, x2, y2, outline='red', width=2)
+
+    def triple_on_mouse_release(self, event):
+        if self.triple_roi_start is None or not hasattr(self, 'triple_processor_image'):
+            return
+        x1, y1 = self.triple_roi_start
+        x2, y2 = event.x, event.y
+        self.triple_roi_start = None
+        self.triple_roi_rect = self.triple_canvas.create_rectangle(x1, y1, x2, y2, outline='red', width=2)
+        image_roi = self._triple_canvas_to_image_roi(x1, y1, x2, y2)
+        self.triple_processor1.batch_set_roi(image_roi)
+        self.triple_processor2.batch_set_roi(image_roi)
+        self.triple_processor3.batch_set_roi(image_roi)
+        self.status_label.config(text=f"Triple comparison ROI selected: {tuple(map(int, image_roi))}")
+
     def _canvas_to_image_roi(self, x1, y1, x2, y2):
         img_width, img_height = self.processor.original_img.size
         return self._canvas_to_image_roi_generic(self.canvas, img_width, img_height, x1, y1, x2, y2)
@@ -425,6 +625,10 @@ class PolarizationGUI(tk.Tk):
     def _compare_canvas_to_image_roi(self, x1, y1, x2, y2):
         img_height, img_width = self.compare_processor_image.shape[:2]
         return self._canvas_to_image_roi_generic(self.compare_canvas, img_width, img_height, x1, y1, x2, y2)
+
+    def _triple_canvas_to_image_roi(self, x1, y1, x2, y2):
+        img_height, img_width = self.triple_processor_image.shape[:2]
+        return self._canvas_to_image_roi_generic(self.triple_canvas, img_width, img_height, x1, y1, x2, y2)
 
     def resize_image(self):
         self.canvas.delete("all")
@@ -496,6 +700,31 @@ class PolarizationGUI(tk.Tk):
             return
         img_height, img_width = self.compare_processor_image.shape[:2]
         self._redraw_roi_generic(self.compare_canvas, self.batch_processor1.batch_roi, img_width, img_height, 'compare_roi_rect')
+
+    def resize_triple_image(self):
+        self.triple_canvas.delete("all")
+        self.triple_canvas.update_idletasks()
+        if not hasattr(self, 'triple_processor_image') or self.triple_processor_image is None:
+            return
+        canvas_width = self.triple_canvas.winfo_width()
+        canvas_height = self.triple_canvas.winfo_height()
+        if canvas_width < 2 or canvas_height < 2:
+            return
+        img_height, img_width = self.triple_processor_image.shape[:2]
+        scale = min(canvas_width / img_width, canvas_height / img_height)
+        new_width = int(img_width * scale)
+        new_height = int(img_height * scale)
+        resized_img = Image.fromarray(self.triple_processor_image).resize((new_width, new_height), Image.LANCZOS)
+        self.triple_img_tk = ImageTk.PhotoImage(resized_img)
+        self.triple_canvas.create_image((canvas_width - new_width) // 2, (canvas_height - new_height) // 2, anchor=tk.NW, image=self.triple_img_tk)
+        self.triple_canvas.image = self.triple_img_tk
+        self._triple_redraw_roi()
+
+    def _triple_redraw_roi(self):
+        if not hasattr(self, 'triple_processor_image') or self.triple_processor_image is None or self.triple_processor1.batch_roi is None:
+            return
+        img_height, img_width = self.triple_processor_image.shape[:2]
+        self._redraw_roi_generic(self.triple_canvas, self.triple_processor1.batch_roi, img_width, img_height, 'triple_roi_rect')
 
     # --- Generic helpers to reduce duplication ---
     def _canvas_to_image_roi_generic(self, canvas, img_width, img_height, x1, y1, x2, y2):
@@ -745,6 +974,83 @@ class PolarizationGUI(tk.Tk):
             else:
                 self.status_label.config(text="Comparison failed: no matching image metadata found. Check that both folders contain corresponding images with matching parameters.")
 
+    def calculate_triple_compare(self):
+        if not hasattr(self.triple_processor1, 'batch_files') or not self.triple_processor1.batch_files:
+            self.status_label.config(text="Load folder 1 first.")
+            return
+        if not hasattr(self.triple_processor2, 'batch_files') or not self.triple_processor2.batch_files:
+            self.status_label.config(text="Load folder 2 first.")
+            return
+        if not hasattr(self.triple_processor3, 'batch_files') or not self.triple_processor3.batch_files:
+            self.status_label.config(text="Load folder 3 first.")
+            return
+        if self.triple_processor1.batch_roi is None:
+            self.status_label.config(text="Select a ROI on the image first.")
+            return
+
+        mode = self.triple_mode_var.get()
+        pol_type = self.triple_pol_var.get()
+        results1 = self.triple_processor1.batch_calculate(mode=mode, pol_type=pol_type)
+        results2 = self.triple_processor2.batch_calculate(mode=mode, pol_type=pol_type)
+        results3 = self.triple_processor3.batch_calculate(mode=mode, pol_type=pol_type)
+        
+        if not results1 or not results2 or not results3:
+            self.status_label.config(text="Triple comparison failed: one dataset did not produce any results.")
+            return
+
+        if len(results1) != len(results2) or len(results1) != len(results3):
+            self.status_label.config(text=f"Triple comparison failed: dataset sizes differ. Ensure all folders contain the same number of matching images.")
+            return
+
+        # Generate three comparison pairs
+        self.triple_results = {'P1-P2': [], 'P1-P3': [], 'P2-P3': []}
+        # Store raw results for reference graphs
+        self.triple_results1 = results1
+        self.triple_results2 = results2
+        self.triple_results3 = results3
+        
+        def create_comparison(r_a, r_b, pol_type):
+            if pol_type == 'linear':
+                dolp_a = float(r_a['pol'][0]) * 100
+                dolp_b = float(r_b['pol'][0]) * 100
+                dolp_diff = dolp_a - dolp_b
+
+                aolp_a = float(r_a['pol'][1])
+                aolp_b = float(r_b['pol'][1])
+                aolp_diff = ((aolp_a - aolp_b + np.pi) % (2 * np.pi)) - np.pi
+                dolp_std_diff = float(r_a['dolp_std']) - float(r_b['dolp_std'])
+                aolp_std_diff = float(r_a['aolp_std']) - float(r_b['aolp_std'])
+                return {
+                    'params': r_a['params'],
+                    'dolp_diff': dolp_diff,
+                    'dolp_std_diff': dolp_std_diff,
+                    'aolp_diff': aolp_diff,
+                    'aolp_std_diff': aolp_std_diff,
+                    'sat_diff': float(r_a['saturation']) - float(r_b['saturation'])
+                }
+            else:
+                docp_diff = float(r_a['pol'][0]) - float(r_b['pol'][0])
+                docp_std_diff = float(r_a['dolp_std']) - float(r_b['dolp_std'])
+                return {
+                    'params': r_a['params'],
+                    'docp_diff': docp_diff,
+                    'docp_std_diff': docp_std_diff,
+                    'sat_diff': float(r_a['saturation']) - float(r_b['saturation'])
+                }
+        
+        # Create all three comparison pairs
+        for r1, r2, r3 in zip(results1, results2, results3):
+            self.triple_results['P1-P2'].append(create_comparison(r1, r2, pol_type))
+            self.triple_results['P1-P3'].append(create_comparison(r1, r3, pol_type))
+            self.triple_results['P2-P3'].append(create_comparison(r2, r3, pol_type))
+
+        if self.triple_results['P1-P2']:
+            self.triple_plot_index = 0
+            self.update_triple_plots()
+            self.status_label.config(text=f"Triple comparison calculated for {len(self.triple_results['P1-P2'])} matched points.")
+        else:
+            self.status_label.config(text="Triple comparison failed: no matching results found.")
+
     def update_plots(self):
         self._clear_plot_canvas('dolp_canvas')
         self._clear_plot_canvas('aolp_canvas')
@@ -858,7 +1164,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.batch_plot_data['dolp_avg'] = (theta, radii, dolp_vals, 'DoLP image average', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,0)})
-            fig1 = self._make_polar_scatter_fig(theta, radii, dolp_vals, 'viridis', 'DoLP image average', vmin=vmin_val, vmax=vmax_val)
+            fig1 = self._make_polar_scatter_fig(theta, radii, dolp_vals, 'viridis', 'DoLP image average', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig1, 'dolp_avg', row=1, column=0)
 
             # Row 0, Col 1: DoLP std dev
@@ -868,7 +1174,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.batch_plot_data['dolp_std'] = (theta, radii, dolp_stds, 'DoLP image standard deviation', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,1)})
-            fig2 = self._make_polar_scatter_fig(theta, radii, dolp_stds, 'Purples', 'DoLP image standard deviation', vmin=vmin_val, vmax=vmax_val)
+            fig2 = self._make_polar_scatter_fig(theta, radii, dolp_stds, 'Purples', 'DoLP image standard deviation', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig2, 'dolp_std', row=1, column=1)
 
             # Row 0, Col 2: Saturation %
@@ -878,7 +1184,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.batch_plot_data['saturation'] = (theta, radii, sat_vals, 'Image saturation % (total 0-255)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,2)})
-            fig3 = self._make_polar_scatter_fig(theta, radii, sat_vals, 'YlGn', 'Image saturation % (total 0-255)', vmin=vmin_val, vmax=vmax_val)
+            fig3 = self._make_polar_scatter_fig(theta, radii, sat_vals, 'YlGn', 'Image saturation % (total 0-255)', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig3, 'saturation', row=1, column=2)
 
             # Row 1, Col 0: AoLP average
@@ -888,7 +1194,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.batch_plot_data['aolp_avg'] = (theta, radii, aolp_vals_norm, 'AoLP image average', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2,0)})
-            fig4 = self._make_polar_scatter_fig(theta, radii, aolp_vals_norm, 'YlGn', 'AoLP image average', vmin=vmin_val, vmax=vmax_val)
+            fig4 = self._make_polar_scatter_fig(theta, radii, aolp_vals_norm, 'YlGn', 'AoLP image average', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig4, 'aolp_avg', row=2, column=0)
 
             # Row 1, Col 1: AoLP std dev
@@ -898,7 +1204,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.batch_plot_data['aolp_std'] = (theta, radii, aolp_stds, 'AoLP image standard deviation', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2,1)})
-            fig5 = self._make_polar_scatter_fig(theta, radii, aolp_stds, 'Blues', 'AoLP image standard deviation', vmin=vmin_val, vmax=vmax_val)
+            fig5 = self._make_polar_scatter_fig(theta, radii, aolp_stds, 'Blues', 'AoLP image standard deviation', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig5, 'aolp_std', row=2, column=1)
 
             # Row 1, Col 2: DoLP distribution
@@ -908,7 +1214,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.batch_plot_data['dolp_dist'] = (theta, radii, dolp_vals, 'DoLP Distribution', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2,2)})
-            fig6 = self._make_polar_scatter_fig(theta, radii, dolp_vals, 'cool', 'DoLP Distribution', vmin=vmin_val, vmax=vmax_val)
+            fig6 = self._make_polar_scatter_fig(theta, radii, dolp_vals, 'cool', 'DoLP Distribution', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig6, 'dolp_dist', row=2, column=2)
 
         else:
@@ -928,7 +1234,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.batch_plot_data['docp_avg'] = (theta, radii, docp_vals, 'DoCP image average', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,0)})
-            fig1 = self._make_polar_scatter_fig(theta, radii, docp_vals, 'RdBu', 'DoCP image average', vmin=vmin_val, vmax=vmax_val)
+            fig1 = self._make_polar_scatter_fig(theta, radii, docp_vals, 'RdBu', 'DoCP image average', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig1, 'docp_avg', row=1, column=0)
 
             # Row 0, Col 1: DoCP std dev
@@ -938,7 +1244,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.batch_plot_data['docp_std'] = (theta, radii, docp_stds, 'DoCP image standard deviation', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,1)})
-            fig2 = self._make_polar_scatter_fig(theta, radii, docp_stds, 'Purples', 'DoCP image standard deviation', vmin=vmin_val, vmax=vmax_val)
+            fig2 = self._make_polar_scatter_fig(theta, radii, docp_stds, 'Purples', 'DoCP image standard deviation', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig2, 'docp_std', row=1, column=1)
 
             # Row 0, Col 2: Saturation %
@@ -948,7 +1254,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.batch_plot_data['saturation'] = (theta, radii, sat_vals, 'Image saturation % (total 0-255)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,2)})
-            fig3 = self._make_polar_scatter_fig(theta, radii, sat_vals, 'YlGn', 'Image saturation % (total 0-255)', vmin=vmin_val, vmax=vmax_val)
+            fig3 = self._make_polar_scatter_fig(theta, radii, sat_vals, 'YlGn', 'Image saturation % (total 0-255)', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig3, 'saturation', row=1, column=2)
 
             # Row 1, Col 0: Circular Polarisation Ratio (RH/LH)
@@ -964,7 +1270,7 @@ class PolarizationGUI(tk.Tk):
             cpr_plot_vals = np.nan_to_num(cpr_vals, nan=0.0, posinf=cpr_max, neginf=0.0)
             cpr_plot_vals = np.clip(cpr_plot_vals, 0.0, max(10.0, cpr_max))
 
-            fig4 = self._make_polar_scatter_fig(theta, radii, cpr_plot_vals, 'plasma', 'Circular Polarisation Ratio (RH/LH)')
+            fig4 = self._make_polar_scatter_fig(theta, radii, cpr_plot_vals, 'plasma', 'Circular Polarisation Ratio (RH/LH)', size=self.batch_point_size.get())
             vmin_val = float(np.nanmin(cpr_plot_vals)) if np.any(np.isfinite(cpr_plot_vals)) else 0.0
             vmax_val = float(np.nanmax(cpr_plot_vals)) if np.any(np.isfinite(cpr_plot_vals)) else 1.0
             cmap_name = 'plasma'
@@ -1022,12 +1328,14 @@ class PolarizationGUI(tk.Tk):
         self._draw_plot_generic(fig, master_frame=self.compare_grid_frame, canvas_store=self.compare_plot_canvases, figures_store=self.compare_plot_figures, attr_name=attr_name, row=row, column=column, adjust_kwargs=adjust)
 
     def on_plot_click(self, attr_name, store):
-        # Determine whether this is a batch or compare plot
+        # Determine whether this is a batch, compare, or triple compare plot
         page = None
         if store is self.batch_plot_canvases:
             page = 'batch'
         elif store is self.compare_plot_canvases:
             page = 'compare'
+        elif store is self.triple_plot_canvases:
+            page = 'triple_compare'
         else:
             return
         self.open_plot_isolation(attr_name, page)
@@ -1042,12 +1350,22 @@ class PolarizationGUI(tk.Tk):
             except Exception:
                 pass
 
-        data_store = self.batch_plot_data if page == 'batch' else self.compare_plot_data
-        fig_store = self.batch_plot_figures if page == 'batch' else self.compare_plot_figures
+        if page == 'triple_compare':
+            data_store = self.triple_plot_data
+            fig_store = self.triple_plot_figures
+        else:
+            data_store = self.batch_plot_data if page == 'batch' else self.compare_plot_data
+            fig_store = self.batch_plot_figures if page == 'batch' else self.compare_plot_figures
 
         if attr_name not in data_store:
             return
         theta, radii, values, title, meta = data_store[attr_name]
+        meta = dict(meta)
+        if page == 'triple_compare':
+            plot_canvas = self.triple_plot_canvases.get(attr_name)
+            if plot_canvas is not None:
+                grid_info = plot_canvas.get_tk_widget().grid_info()
+                meta['pos'] = (int(grid_info['row']), int(grid_info['column']))
 
         # initial vmin/vmax from metadata
         vmin = float(meta.get('vmin', float(np.nanmin(values)) if np.any(np.isfinite(values)) else 0.0))
@@ -1072,7 +1390,15 @@ class PolarizationGUI(tk.Tk):
             middle_init = meta.get('middle_color', '#ffffff')
             cmap_obj = self._make_custom_colormap(low_init, middle_init, high_init)
 
-        fig = self._make_polar_scatter_fig(theta, radii, values, cmap=cmap_obj, title=title, vmin=vmin, vmax=vmax)
+        if page == 'batch':
+            main_point_size = self.batch_point_size.get()
+        elif page == 'compare':
+            main_point_size = self.compare_point_size.get()
+        else:
+            main_point_size = self.triple_point_size.get()
+        isolation_point_size = tk.IntVar(value=main_point_size)
+
+        fig = self._make_polar_scatter_fig(theta, radii, values, cmap=cmap_obj, title=title, vmin=vmin, vmax=vmax, size=isolation_point_size.get())
         canvas = FigureCanvasTkAgg(fig, master=plot_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
@@ -1300,6 +1626,41 @@ class PolarizationGUI(tk.Tk):
         max_box.bind('<FocusOut>', boxes_to_slider)
         range_slider.on_change = slider_to_boxes
 
+        def render_isolated_plot(cmap, vmin_value, vmax_value):
+            isolated_fig = self._make_polar_scatter_fig(
+                theta, radii, values, cmap=cmap, title=title,
+                vmin=vmin_value, vmax=vmax_value,
+                size=isolation_point_size.get()
+            )
+            for child in plot_frame.winfo_children():
+                child.destroy()
+            isolated_canvas = FigureCanvasTkAgg(isolated_fig, master=plot_frame)
+            isolated_canvas.draw()
+            isolated_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+            return isolated_fig
+
+        def update_isolation_point_size(value=None):
+            try:
+                current_vmin, current_vmax = get_typed_range()
+                render_isolated_plot(
+                    self._make_custom_colormap(
+                        low_color_var.get(),
+                        middle_color_var.get(),
+                        high_color_var.get()
+                    ),
+                    current_vmin,
+                    current_vmax
+                )
+            except ValueError:
+                pass
+
+        tk.Label(controls_frame, text='Datapoint Size:').grid(row=3, column=0, sticky='e')
+        isolation_size_scale = tk.Scale(
+            controls_frame, from_=1, to=100, orient=tk.HORIZONTAL,
+            variable=isolation_point_size, command=update_isolation_point_size
+        )
+        isolation_size_scale.grid(row=3, column=1, columnspan=3, sticky='ew', padx=4)
+
         # Re-pack the initial canvas after controls are added so layout accounts for control height
         try:
             canvas_widget = canvas.get_tk_widget()
@@ -1324,31 +1685,19 @@ class PolarizationGUI(tk.Tk):
             except Exception:
                 pass
 
-            # create new fig and update isolated canvas in-place
-            new_fig = self._make_polar_scatter_fig(theta, radii, values, cmap=cmap, title=title, vmin=vmin_new, vmax=vmax_new)
-            try:
-                # destroy existing contents of the plot frame to avoid residual images
-                for child in plot_frame.winfo_children():
-                    child.destroy()
-            except Exception:
-                pass
-            new_canvas = FigureCanvasTkAgg(new_fig, master=plot_frame)
-            new_canvas.draw()
-            new_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-            try:
-                plot_frame.update_idletasks()
-                w = plot_frame.winfo_width()
-                h = plot_frame.winfo_height()
-                new_canvas.get_tk_widget().config(width=w, height=h)
-            except Exception:
-                pass
+            # Redraw the isolated plot using its local point-size setting.
+            render_isolated_plot(cmap, vmin_new, vmax_new)
 
             # persist metadata
             meta_new = {'low_color': low, 'middle_color': middle, 'high_color': high, 'vmin': float(vmin_new), 'vmax': float(vmax_new), 'cmap': 'custom', 'pos': meta.get('pos', (1,0))}
             data_store[attr_name] = (theta, radii, values, title, meta_new)
 
             # update stored figure and redraw in main UI without stealing focus
-            fig_store[attr_name] = new_fig
+            main_fig = self._make_polar_scatter_fig(
+                theta, radii, values, cmap=cmap, title=title,
+                vmin=vmin_new, vmax=vmax_new, size=main_point_size
+            )
+            fig_store[attr_name] = main_fig
             if page == 'batch':
                 try:
                     self._clear_batch_plot_canvas(attr_name)
@@ -1356,10 +1705,10 @@ class PolarizationGUI(tk.Tk):
                     pass
                 try:
                     r,c = meta_new.get('pos', (1,0))
-                    self._draw_batch_plot(new_fig, attr_name, row=r, column=c)
+                    self._draw_batch_plot(main_fig, attr_name, row=r, column=c)
                 except Exception:
                     pass
-            else:
+            elif page == 'compare':
                 try:
                     existing = self.compare_plot_canvases.get(attr_name)
                     if existing is not None:
@@ -1369,7 +1718,20 @@ class PolarizationGUI(tk.Tk):
                     pass
                 try:
                     r,c = meta_new.get('pos', (1,0))
-                    self._draw_compare_plot(new_fig, attr_name, row=r, column=c)
+                    self._draw_compare_plot(main_fig, attr_name, row=r, column=c)
+                except Exception:
+                    pass
+            elif page == 'triple_compare':
+                try:
+                    existing = self.triple_plot_canvases.get(attr_name)
+                    if existing is not None:
+                        existing.get_tk_widget().destroy()
+                        del self.triple_plot_canvases[attr_name]
+                except Exception:
+                    pass
+                try:
+                    r, c = meta_new.get('pos', (1, 0))
+                    self._draw_triple_plot(main_fig, attr_name, row=r, column=c)
                 except Exception:
                     pass
 
@@ -1390,7 +1752,10 @@ class PolarizationGUI(tk.Tk):
                 high = high_color_var.get()
                 vmin_new, vmax_new = get_typed_range()
                 cmap = self._make_custom_colormap(low, middle, high)
-                new_fig = self._make_polar_scatter_fig(theta, radii, values, cmap=cmap, title=title, vmin=vmin_new, vmax=vmax_new)
+                new_fig = self._make_polar_scatter_fig(
+                    theta, radii, values, cmap=cmap, title=title,
+                    vmin=vmin_new, vmax=vmax_new, size=main_point_size
+                )
                 meta_new = {'low_color': low, 'middle_color': middle, 'high_color': high, 'vmin': float(vmin_new), 'vmax': float(vmax_new), 'cmap': 'custom', 'pos': meta.get('pos', (1,0))}
                 data_store[attr_name] = (theta, radii, values, title, meta_new)
                 fig_store[attr_name] = new_fig
@@ -1404,7 +1769,7 @@ class PolarizationGUI(tk.Tk):
                         self._draw_batch_plot(new_fig, attr_name, row=r, column=c)
                     except Exception:
                         pass
-                else:
+                elif page == 'compare':
                     try:
                         existing = self.compare_plot_canvases.get(attr_name)
                         if existing is not None:
@@ -1415,6 +1780,19 @@ class PolarizationGUI(tk.Tk):
                     try:
                         r,c = meta_new.get('pos', (1,0))
                         self._draw_compare_plot(new_fig, attr_name, row=r, column=c)
+                    except Exception:
+                        pass
+                elif page == 'triple_compare':
+                    try:
+                        existing = self.triple_plot_canvases.get(attr_name)
+                        if existing is not None:
+                            existing.get_tk_widget().destroy()
+                            del self.triple_plot_canvases[attr_name]
+                    except Exception:
+                        pass
+                    try:
+                        r,c = meta_new.get('pos', (1,0))
+                        self._draw_triple_plot(new_fig, attr_name, row=r, column=c)
                     except Exception:
                         pass
             except Exception:
@@ -1461,7 +1839,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.compare_plot_data['dolp_diff'] = (theta, radii, dolp_vals, 'DoLP difference (1 - 2)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,0)})
-            fig1 = self._make_polar_scatter_fig(theta, radii, dolp_vals, 'RdBu', 'DoLP difference (1 - 2)', vmin=vmin_val, vmax=vmax_val)
+            fig1 = self._make_polar_scatter_fig(theta, radii, dolp_vals, 'RdBu', 'DoLP difference (1 - 2)', vmin=vmin_val, vmax=vmax_val, size=self.compare_point_size.get())
             self._draw_compare_plot(fig1, 'dolp_diff', row=1, column=0)
 
             vmin_val = float(np.nanmin(dolp_std_vals)) if np.any(np.isfinite(dolp_std_vals)) else 0.0
@@ -1470,7 +1848,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.compare_plot_data['dolp_std_diff'] = (theta, radii, dolp_std_vals, 'DoLP std diff (1 - 2)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,1)})
-            fig2 = self._make_polar_scatter_fig(theta, radii, dolp_std_vals, 'Purples', 'DoLP std diff (1 - 2)', vmin=vmin_val, vmax=vmax_val)
+            fig2 = self._make_polar_scatter_fig(theta, radii, dolp_std_vals, 'Purples', 'DoLP std diff (1 - 2)', vmin=vmin_val, vmax=vmax_val, size=self.compare_point_size.get())
             self._draw_compare_plot(fig2, 'dolp_std_diff', row=1, column=1)
 
             vmin_val = float(np.nanmin(sat_vals)) if np.any(np.isfinite(sat_vals)) else 0.0
@@ -1479,7 +1857,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.compare_plot_data['sat_diff'] = (theta, radii, sat_vals, 'Saturation diff (1 - 2)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,2)})
-            fig3 = self._make_polar_scatter_fig(theta, radii, sat_vals, 'YlGn', 'Saturation diff (1 - 2)', vmin=vmin_val, vmax=vmax_val)
+            fig3 = self._make_polar_scatter_fig(theta, radii, sat_vals, 'YlGn', 'Saturation diff (1 - 2)', vmin=vmin_val, vmax=vmax_val, size=self.compare_point_size.get())
             self._draw_compare_plot(fig3, 'sat_diff', row=1, column=2)
 
             vmin_val = float(np.nanmin(aolp_vals)) if np.any(np.isfinite(aolp_vals)) else 0.0
@@ -1488,7 +1866,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.compare_plot_data['aolp_diff'] = (theta, radii, aolp_vals, 'AoLP difference (1 - 2)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2,0)})
-            fig4 = self._make_polar_scatter_fig(theta, radii, aolp_vals, 'YlGn', 'AoLP difference (1 - 2)', vmin=vmin_val, vmax=vmax_val)
+            fig4 = self._make_polar_scatter_fig(theta, radii, aolp_vals, 'YlGn', 'AoLP difference (1 - 2)', vmin=vmin_val, vmax=vmax_val, size=self.compare_point_size.get())
             self._draw_compare_plot(fig4, 'aolp_diff', row=2, column=0)
 
             vmin_val = float(np.nanmin(aolp_std_vals)) if np.any(np.isfinite(aolp_std_vals)) else 0.0
@@ -1497,7 +1875,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.compare_plot_data['aolp_std_diff'] = (theta, radii, aolp_std_vals, 'AoLP std diff (1 - 2)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2,1)})
-            fig5 = self._make_polar_scatter_fig(theta, radii, aolp_std_vals, 'Blues', 'AoLP std diff (1 - 2)', vmin=vmin_val, vmax=vmax_val)
+            fig5 = self._make_polar_scatter_fig(theta, radii, aolp_std_vals, 'Blues', 'AoLP std diff (1 - 2)', vmin=vmin_val, vmax=vmax_val, size=self.compare_point_size.get())
             self._draw_compare_plot(fig5, 'aolp_std_diff', row=2, column=1)
 
             vmin_val = float(np.nanmin(dolp_vals)) if np.any(np.isfinite(dolp_vals)) else 0.0
@@ -1506,7 +1884,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.compare_plot_data['dolp_diff_dist'] = (theta, radii, dolp_vals, 'DoLP diff distribution', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2,2)})
-            fig6 = self._make_polar_scatter_fig(theta, radii, dolp_vals, 'cool', 'DoLP diff distribution', vmin=vmin_val, vmax=vmax_val)
+            fig6 = self._make_polar_scatter_fig(theta, radii, dolp_vals, 'cool', 'DoLP diff distribution', vmin=vmin_val, vmax=vmax_val, size=self.compare_point_size.get())
             self._draw_compare_plot(fig6, 'dolp_diff_dist', row=2, column=2)
 
         else:
@@ -1524,7 +1902,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.compare_plot_data['docp_diff'] = (theta, radii, docp_vals, 'DoCP difference (1 - 2)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,0)})
-            fig1 = self._make_polar_scatter_fig(theta, radii, docp_vals, 'RdBu', 'DoCP difference (1 - 2)', vmin=vmin_val, vmax=vmax_val)
+            fig1 = self._make_polar_scatter_fig(theta, radii, docp_vals, 'RdBu', 'DoCP difference (1 - 2)', vmin=vmin_val, vmax=vmax_val, size=self.compare_point_size.get())
             self._draw_compare_plot(fig1, 'docp_diff', row=1, column=0)
 
             vmin_val = float(np.nanmin(docp_std_vals)) if np.any(np.isfinite(docp_std_vals)) else 0.0
@@ -1533,7 +1911,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.compare_plot_data['docp_std_diff'] = (theta, radii, docp_std_vals, 'DoCP std diff (1 - 2)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,1)})
-            fig2 = self._make_polar_scatter_fig(theta, radii, docp_std_vals, 'Purples', 'DoCP std diff (1 - 2)', vmin=vmin_val, vmax=vmax_val)
+            fig2 = self._make_polar_scatter_fig(theta, radii, docp_std_vals, 'Purples', 'DoCP std diff (1 - 2)', vmin=vmin_val, vmax=vmax_val, size=self.compare_point_size.get())
             self._draw_compare_plot(fig2, 'docp_std_diff', row=1, column=1)
 
             vmin_val = float(np.nanmin(sat_vals)) if np.any(np.isfinite(sat_vals)) else 0.0
@@ -1542,7 +1920,7 @@ class PolarizationGUI(tk.Tk):
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.compare_plot_data['sat_diff'] = (theta, radii, sat_vals, 'Saturation diff (1 - 2)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,2)})
-            fig3 = self._make_polar_scatter_fig(theta, radii, sat_vals, 'YlGn', 'Saturation diff (1 - 2)', vmin=vmin_val, vmax=vmax_val)
+            fig3 = self._make_polar_scatter_fig(theta, radii, sat_vals, 'YlGn', 'Saturation diff (1 - 2)', vmin=vmin_val, vmax=vmax_val, size=self.compare_point_size.get())
             self._draw_compare_plot(fig3, 'sat_diff', row=1, column=2)
 
             # Circular Polarisation Ratio difference for compare
@@ -1557,7 +1935,7 @@ class PolarizationGUI(tk.Tk):
                 cpr_max = 1.0
             cpr_plot_vals = np.clip(np.nan_to_num(cpr_vals, nan=0.0, posinf=cpr_max, neginf=0.0), 0.0, max(10.0, cpr_max))
 
-            fig4 = self._make_polar_scatter_fig(theta, radii, cpr_plot_vals, 'plasma', 'Circular Polarisation Ratio diff')
+            fig4 = self._make_polar_scatter_fig(theta, radii, cpr_plot_vals, 'plasma', 'Circular Polarisation Ratio diff', size=self.compare_point_size.get())
             vmin_val = float(np.nanmin(cpr_plot_vals)) if np.any(np.isfinite(cpr_plot_vals)) else 0.0
             vmax_val = float(np.nanmax(cpr_plot_vals)) if np.any(np.isfinite(cpr_plot_vals)) else 1.0
             cmap_name = 'plasma'
@@ -1565,6 +1943,305 @@ class PolarizationGUI(tk.Tk):
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.compare_plot_data['cpr_diff'] = (theta, radii, cpr_plot_vals, 'Circular Polarisation Ratio diff', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2,0)})
             self._draw_compare_plot(fig4, 'cpr_diff', row=2, column=0)
+
+    def update_triple_plots(self):
+        """Update triple comparison plots. Shows 4 plots in 2x2 grid: 3 comparisons + 1 dataset 1 reference."""
+        for canvas in self.triple_plot_canvases.values():
+            if canvas is not None:
+                canvas.get_tk_widget().destroy()
+        self.triple_plot_canvases.clear()
+
+        if not self.triple_results or not self.triple_results.get('P1-P2'):
+            return
+
+        pol_type = self.triple_pol_var.get()
+        
+        # Extract common params (use P1-P2 data)
+        results = self.triple_results['P1-P2']
+        azimuths = np.array([float(r['params']['az']) for r in results], dtype=float)
+        zeniths = np.array([float(r['params']['ze']) for r in results], dtype=float)
+        mirrored_azimuths = 360 - azimuths
+        azimuths_full = np.concatenate([azimuths, mirrored_azimuths])
+        zeniths_full = np.concatenate([zeniths, zeniths])
+        theta = np.deg2rad(azimuths_full)
+        radii = zeniths_full
+
+        # Define 6 plot types with their generation logic
+        plot_types = [
+            'dolp_diff' if pol_type == 'linear' else 'docp_diff',
+            'dolp_std_diff' if pol_type == 'linear' else 'docp_std_diff',
+            'aolp_diff' if pol_type == 'linear' else 'cpr_diff',
+            'aolp_std_diff' if pol_type == 'linear' else 'sat_diff',
+            'sat_diff' if pol_type == 'linear' else 'placeholder_1',
+            'dolp_dist' if pol_type == 'linear' else 'placeholder_2'
+        ]
+
+        if self.triple_plot_index >= len(plot_types):
+            self.triple_plot_index = 0
+
+        plot_type = plot_types[self.triple_plot_index]
+        comparison_pairs = [('P1-P2', 0, 0), ('P1-P3', 0, 1), ('P2-P3', 1, 0)]  # (pair_name, row, col)
+
+        if pol_type == 'linear':
+            if plot_type == 'dolp_diff':
+                for pair, row, col in comparison_pairs:
+                    diffs = np.array([r['dolp_diff'] for r in self.triple_results[pair]], dtype=float)
+                    vals = self.mirror_array(diffs)
+                    vmin_val = float(np.nanmin(vals)) if np.any(np.isfinite(vals)) else -10.0
+                    vmax_val = float(np.nanmax(vals)) if np.any(np.isfinite(vals)) else 10.0
+                    cmap_name = 'RdBu'
+                    lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                    highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                    self.triple_plot_data[f'dolp_diff_{pair}'] = (theta, radii, vals, f'DoLP difference ({pair})', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                    fig = self._make_polar_scatter_fig(theta, radii, vals, cmap_name, f'DoLP difference ({pair})', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                    self._draw_triple_plot(fig, f'dolp_diff_{pair}', row=row, column=col)
+                # Dataset 1 reference (bottom right)
+                ref_vals = self.mirror_array(np.array([float(r['pol'][0])*100 for r in self.triple_results1], dtype=float))
+                vmin_val = float(np.nanmin(ref_vals)) if np.any(np.isfinite(ref_vals)) else 0.0
+                vmax_val = float(np.nanmax(ref_vals)) if np.any(np.isfinite(ref_vals)) else 100.0
+                cmap_name = 'viridis'
+                lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                self.triple_plot_data['dolp_ref_d1'] = (theta, radii, ref_vals, 'DoLP - Dataset 1 Reference', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                fig_ref = self._make_polar_scatter_fig(theta, radii, ref_vals, cmap_name, 'DoLP - Dataset 1 Reference', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                self._draw_triple_plot(fig_ref, 'dolp_ref_d1', row=1, column=1)
+            elif plot_type == 'dolp_std_diff':
+                for pair, row, col in comparison_pairs:
+                    diffs = np.array([r['dolp_std_diff'] for r in self.triple_results[pair]], dtype=float)
+                    vals = self.mirror_array(diffs)
+                    vmin_val = float(np.nanmin(vals)) if np.any(np.isfinite(vals)) else 0.0
+                    vmax_val = float(np.nanmax(vals)) if np.any(np.isfinite(vals)) else 1.0
+                    cmap_name = 'Purples'
+                    lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                    highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                    self.triple_plot_data[f'dolp_std_diff_{pair}'] = (theta, radii, vals, f'DoLP std diff ({pair})', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                    fig = self._make_polar_scatter_fig(theta, radii, vals, cmap_name, f'DoLP std diff ({pair})', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                    self._draw_triple_plot(fig, f'dolp_std_diff_{pair}', row=row, column=col)
+                # Dataset 1 reference
+                ref_vals = self.mirror_array(np.array([float(r['dolp_std']) for r in self.triple_results1], dtype=float))
+                vmin_val = float(np.nanmin(ref_vals)) if np.any(np.isfinite(ref_vals)) else 0.0
+                vmax_val = float(np.nanmax(ref_vals)) if np.any(np.isfinite(ref_vals)) else 1.0
+                cmap_name = 'Purples'
+                lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                self.triple_plot_data['dolp_std_ref_d1'] = (theta, radii, ref_vals, 'DoLP Std - Dataset 1 Reference', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                fig_ref = self._make_polar_scatter_fig(theta, radii, ref_vals, cmap_name, 'DoLP Std - Dataset 1 Reference', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                self._draw_triple_plot(fig_ref, 'dolp_std_ref_d1', row=1, column=1)
+            elif plot_type == 'aolp_diff':
+                for pair, row, col in comparison_pairs:
+                    diffs = np.array([r['aolp_diff'] for r in self.triple_results[pair]], dtype=float)
+                    vals = self.mirror_array(diffs)
+                    vmin_val = float(np.nanmin(vals)) if np.any(np.isfinite(vals)) else 0.0
+                    vmax_val = float(np.nanmax(vals)) if np.any(np.isfinite(vals)) else 1.0
+                    cmap_name = 'YlGn'
+                    lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                    highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                    self.triple_plot_data[f'aolp_diff_{pair}'] = (theta, radii, vals, f'AoLP difference ({pair})', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                    fig = self._make_polar_scatter_fig(theta, radii, vals, cmap_name, f'AoLP difference ({pair})', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                    self._draw_triple_plot(fig, f'aolp_diff_{pair}', row=row, column=col)
+                # Dataset 1 reference
+                ref_vals = self.mirror_array(np.array([float(r['pol'][1]) for r in self.triple_results1], dtype=float))
+                vmin_val = float(np.nanmin(ref_vals)) if np.any(np.isfinite(ref_vals)) else 0.0
+                vmax_val = float(np.nanmax(ref_vals)) if np.any(np.isfinite(ref_vals)) else 1.0
+                cmap_name = 'YlGn'
+                lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                self.triple_plot_data['aolp_ref_d1'] = (theta, radii, ref_vals, 'AoLP - Dataset 1 Reference', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                fig_ref = self._make_polar_scatter_fig(theta, radii, ref_vals, cmap_name, 'AoLP - Dataset 1 Reference', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                self._draw_triple_plot(fig_ref, 'aolp_ref_d1', row=1, column=1)
+            elif plot_type == 'aolp_std_diff':
+                for pair, row, col in comparison_pairs:
+                    diffs = np.array([r['aolp_std_diff'] for r in self.triple_results[pair]], dtype=float)
+                    vals = self.mirror_array(diffs)
+                    vmin_val = float(np.nanmin(vals)) if np.any(np.isfinite(vals)) else 0.0
+                    vmax_val = float(np.nanmax(vals)) if np.any(np.isfinite(vals)) else 1.0
+                    cmap_name = 'Blues'
+                    lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                    highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                    self.triple_plot_data[f'aolp_std_diff_{pair}'] = (theta, radii, vals, f'AoLP std diff ({pair})', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                    fig = self._make_polar_scatter_fig(theta, radii, vals, cmap_name, f'AoLP std diff ({pair})', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                    self._draw_triple_plot(fig, f'aolp_std_diff_{pair}', row=row, column=col)
+                # Dataset 1 reference
+                ref_vals = self.mirror_array(np.array([float(r['aolp_std']) for r in self.triple_results1], dtype=float))
+                vmin_val = float(np.nanmin(ref_vals)) if np.any(np.isfinite(ref_vals)) else 0.0
+                vmax_val = float(np.nanmax(ref_vals)) if np.any(np.isfinite(ref_vals)) else 1.0
+                cmap_name = 'Blues'
+                lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                self.triple_plot_data['aolp_std_ref_d1'] = (theta, radii, ref_vals, 'AoLP Std - Dataset 1 Reference', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                fig_ref = self._make_polar_scatter_fig(theta, radii, ref_vals, cmap_name, 'AoLP Std - Dataset 1 Reference', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                self._draw_triple_plot(fig_ref, 'aolp_std_ref_d1', row=1, column=1)
+            elif plot_type == 'sat_diff':
+                for pair, row, col in comparison_pairs:
+                    diffs = np.array([r['sat_diff'] for r in self.triple_results[pair]], dtype=float)
+                    vals = self.mirror_array(diffs)
+                    vmin_val = float(np.nanmin(vals)) if np.any(np.isfinite(vals)) else 0.0
+                    vmax_val = float(np.nanmax(vals)) if np.any(np.isfinite(vals)) else 1.0
+                    cmap_name = 'YlGn'
+                    lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                    highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                    self.triple_plot_data[f'sat_diff_{pair}'] = (theta, radii, vals, f'Saturation diff ({pair})', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                    fig = self._make_polar_scatter_fig(theta, radii, vals, cmap_name, f'Saturation diff ({pair})', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                    self._draw_triple_plot(fig, f'sat_diff_{pair}', row=row, column=col)
+                # Dataset 1 reference
+                ref_vals = self.mirror_array(np.array([float(r['saturation']) for r in self.triple_results1], dtype=float))
+                vmin_val = float(np.nanmin(ref_vals)) if np.any(np.isfinite(ref_vals)) else 0.0
+                vmax_val = float(np.nanmax(ref_vals)) if np.any(np.isfinite(ref_vals)) else 100.0
+                cmap_name = 'YlGn'
+                lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                self.triple_plot_data['sat_ref_d1'] = (theta, radii, ref_vals, 'Saturation - Dataset 1 Reference', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                fig_ref = self._make_polar_scatter_fig(theta, radii, ref_vals, cmap_name, 'Saturation - Dataset 1 Reference', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                self._draw_triple_plot(fig_ref, 'sat_ref_d1', row=1, column=1)
+            elif plot_type == 'dolp_dist':
+                for pair, row, col in comparison_pairs:
+                    diffs = np.array([r['dolp_diff'] for r in self.triple_results[pair]], dtype=float)
+                    vals = self.mirror_array(diffs)
+                    vmin_val = float(np.nanmin(vals)) if np.any(np.isfinite(vals)) else 0.0
+                    vmax_val = float(np.nanmax(vals)) if np.any(np.isfinite(vals)) else 1.0
+                    cmap_name = 'cool'
+                    lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                    highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                    self.triple_plot_data[f'dolp_dist_{pair}'] = (theta, radii, vals, f'DoLP distribution ({pair})', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                    fig = self._make_polar_scatter_fig(theta, radii, vals, cmap_name, f'DoLP distribution ({pair})', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                    self._draw_triple_plot(fig, f'dolp_dist_{pair}', row=row, column=col)
+                # Dataset 1 reference
+                ref_vals = self.mirror_array(np.array([float(r['pol'][0])*100 for r in self.triple_results1], dtype=float))
+                vmin_val = float(np.nanmin(ref_vals)) if np.any(np.isfinite(ref_vals)) else 0.0
+                vmax_val = float(np.nanmax(ref_vals)) if np.any(np.isfinite(ref_vals)) else 100.0
+                cmap_name = 'cool'
+                lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                self.triple_plot_data['dolp_dist_ref_d1'] = (theta, radii, ref_vals, 'DoLP Distribution - Dataset 1 Ref', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                fig_ref = self._make_polar_scatter_fig(theta, radii, ref_vals, cmap_name, 'DoLP Distribution - Dataset 1 Ref', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                self._draw_triple_plot(fig_ref, 'dolp_dist_ref_d1', row=1, column=1)
+        else:  # Circular
+            if plot_type == 'docp_diff':
+                for pair, row, col in comparison_pairs:
+                    diffs = np.array([r['docp_diff'] for r in self.triple_results[pair]], dtype=float)
+                    vals = self.mirror_array(diffs)
+                    vmin_val = float(np.nanmin(vals)) if np.any(np.isfinite(vals)) else -1.0
+                    vmax_val = float(np.nanmax(vals)) if np.any(np.isfinite(vals)) else 1.0
+                    cmap_name = 'RdBu'
+                    lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                    highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                    self.triple_plot_data[f'docp_diff_{pair}'] = (theta, radii, vals, f'DoCP difference ({pair})', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                    fig = self._make_polar_scatter_fig(theta, radii, vals, cmap_name, f'DoCP difference ({pair})', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                    self._draw_triple_plot(fig, f'docp_diff_{pair}', row=row, column=col)
+                # Dataset 1 reference
+                ref_vals = self.mirror_array(np.array([float(r['pol'][0]) for r in self.triple_results1], dtype=float))
+                vmin_val = float(np.nanmin(ref_vals)) if np.any(np.isfinite(ref_vals)) else -1.0
+                vmax_val = float(np.nanmax(ref_vals)) if np.any(np.isfinite(ref_vals)) else 1.0
+                cmap_name = 'RdBu'
+                lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                self.triple_plot_data['docp_ref_d1'] = (theta, radii, ref_vals, 'DoCP - Dataset 1 Reference', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                fig_ref = self._make_polar_scatter_fig(theta, radii, ref_vals, cmap_name, 'DoCP - Dataset 1 Reference', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                self._draw_triple_plot(fig_ref, 'docp_ref_d1', row=1, column=1)
+            elif plot_type == 'docp_std_diff':
+                for pair, row, col in comparison_pairs:
+                    diffs = np.array([r['docp_std_diff'] for r in self.triple_results[pair]], dtype=float)
+                    vals = self.mirror_array(diffs)
+                    vmin_val = float(np.nanmin(vals)) if np.any(np.isfinite(vals)) else 0.0
+                    vmax_val = float(np.nanmax(vals)) if np.any(np.isfinite(vals)) else 1.0
+                    cmap_name = 'Purples'
+                    lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                    highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                    self.triple_plot_data[f'docp_std_diff_{pair}'] = (theta, radii, vals, f'DoCP std diff ({pair})', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                    fig = self._make_polar_scatter_fig(theta, radii, vals, cmap_name, f'DoCP std diff ({pair})', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                    self._draw_triple_plot(fig, f'docp_std_diff_{pair}', row=row, column=col)
+                # Dataset 1 reference
+                ref_vals = self.mirror_array(np.array([float(r['dolp_std']) for r in self.triple_results1], dtype=float))
+                vmin_val = float(np.nanmin(ref_vals)) if np.any(np.isfinite(ref_vals)) else 0.0
+                vmax_val = float(np.nanmax(ref_vals)) if np.any(np.isfinite(ref_vals)) else 1.0
+                cmap_name = 'Purples'
+                lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                self.triple_plot_data['docp_std_ref_d1'] = (theta, radii, ref_vals, 'DoCP Std - Dataset 1 Reference', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                fig_ref = self._make_polar_scatter_fig(theta, radii, ref_vals, cmap_name, 'DoCP Std - Dataset 1 Reference', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                self._draw_triple_plot(fig_ref, 'docp_std_ref_d1', row=1, column=1)
+            elif plot_type == 'cpr_diff':
+                for pair, row, col in comparison_pairs:
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        cpr_vals = (1.0 + np.array([r['docp_diff'] for r in self.triple_results[pair]], dtype=float)) / (1.0 - np.array([r['docp_diff'] for r in self.triple_results[pair]], dtype=float))
+                    cpr_vals = self.mirror_array(cpr_vals)
+                    finite_mask = np.isfinite(cpr_vals)
+                    cpr_max = np.nanmax(cpr_vals[finite_mask]) if np.any(finite_mask) else 1.0
+                    cpr_plot_vals = np.clip(np.nan_to_num(cpr_vals, nan=0.0, posinf=cpr_max, neginf=0.0), 0.0, max(10.0, cpr_max))
+                    vmin_val = float(np.nanmin(cpr_plot_vals)) if np.any(np.isfinite(cpr_plot_vals)) else 0.0
+                    vmax_val = float(np.nanmax(cpr_plot_vals)) if np.any(np.isfinite(cpr_plot_vals)) else 1.0
+                    cmap_name = 'plasma'
+                    lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                    highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                    self.triple_plot_data[f'cpr_diff_{pair}'] = (theta, radii, cpr_plot_vals, f'Circular Pol. Ratio diff ({pair})', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                    fig = self._make_polar_scatter_fig(theta, radii, cpr_plot_vals, cmap_name, f'Circular Pol. Ratio diff ({pair})', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                    self._draw_triple_plot(fig, f'cpr_diff_{pair}', row=row, column=col)
+                # Dataset 1 reference
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    cpr_ref = (1.0 + np.array([float(r['pol'][0]) for r in self.triple_results1], dtype=float)) / (1.0 - np.array([float(r['pol'][0]) for r in self.triple_results1], dtype=float))
+                cpr_ref = self.mirror_array(cpr_ref)
+                finite_mask = np.isfinite(cpr_ref)
+                cpr_max = np.nanmax(cpr_ref[finite_mask]) if np.any(finite_mask) else 1.0
+                cpr_plot_ref = np.clip(np.nan_to_num(cpr_ref, nan=0.0, posinf=cpr_max, neginf=0.0), 0.0, max(10.0, cpr_max))
+                vmin_val = float(np.nanmin(cpr_plot_ref)) if np.any(np.isfinite(cpr_plot_ref)) else 0.0
+                vmax_val = float(np.nanmax(cpr_plot_ref)) if np.any(np.isfinite(cpr_plot_ref)) else 1.0
+                cmap_name = 'plasma'
+                lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                self.triple_plot_data['cpr_ref_d1'] = (theta, radii, cpr_plot_ref, 'Circular Pol. Ratio - Dataset 1 Ref', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                fig_ref = self._make_polar_scatter_fig(theta, radii, cpr_plot_ref, cmap_name, 'Circular Pol. Ratio - Dataset 1 Ref', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                self._draw_triple_plot(fig_ref, 'cpr_ref_d1', row=1, column=1)
+            elif plot_type == 'sat_diff':
+                for pair, row, col in comparison_pairs:
+                    diffs = np.array([r['sat_diff'] for r in self.triple_results[pair]], dtype=float)
+                    vals = self.mirror_array(diffs)
+                    vmin_val = float(np.nanmin(vals)) if np.any(np.isfinite(vals)) else 0.0
+                    vmax_val = float(np.nanmax(vals)) if np.any(np.isfinite(vals)) else 1.0
+                    cmap_name = 'YlGn'
+                    lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                    highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                    self.triple_plot_data[f'sat_diff_{pair}'] = (theta, radii, vals, f'Saturation diff ({pair})', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                    fig = self._make_polar_scatter_fig(theta, radii, vals, cmap_name, f'Saturation diff ({pair})', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                    self._draw_triple_plot(fig, f'sat_diff_{pair}', row=row, column=col)
+                # Dataset 1 reference
+                ref_vals = self.mirror_array(np.array([float(r['saturation']) for r in self.triple_results1], dtype=float))
+                vmin_val = float(np.nanmin(ref_vals)) if np.any(np.isfinite(ref_vals)) else 0.0
+                vmax_val = float(np.nanmax(ref_vals)) if np.any(np.isfinite(ref_vals)) else 100.0
+                cmap_name = 'YlGn'
+                lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
+                highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
+                self.triple_plot_data['sat_ref_d1'] = (theta, radii, ref_vals, 'Saturation - Dataset 1 Reference', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name})
+                fig_ref = self._make_polar_scatter_fig(theta, radii, ref_vals, cmap_name, 'Saturation - Dataset 1 Reference', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
+                self._draw_triple_plot(fig_ref, 'sat_ref_d1', row=1, column=1)
+
+        self.triple_plot_type_label.config(text=f"Plot Type: {self.triple_plot_index + 1}/6")
+
+
+    def triple_next_plot(self):
+        """Navigate to next plot type."""
+        self.triple_plot_index = (self.triple_plot_index + 1) % 6
+        self.update_triple_plots()
+
+    def triple_prev_plot(self):
+        """Navigate to previous plot type."""
+        self.triple_plot_index = (self.triple_plot_index - 1) % 6
+        self.update_triple_plots()
+
+    def clear_triple_plots(self):
+        """Clear all triple comparison plots."""
+        for canvas in self.triple_plot_canvases.values():
+            if canvas is not None:
+                try:
+                    canvas.get_tk_widget().destroy()
+                except Exception:
+                    pass
+        self.triple_plot_canvases.clear()
+        self.triple_plot_data.clear()
+        self.triple_plot_figures.clear()
+
+    def _draw_triple_plot(self, fig, attr_name, row, column):
+        adjust = {'left': 0.15, 'right': 0.75, 'top': 0.80, 'bottom': 0.12, 'pad': 1.5}
+        self._draw_plot_generic(fig, master_frame=self.triple_grid_frame, canvas_store=self.triple_plot_canvases, figures_store=self.triple_plot_figures, attr_name=attr_name, row=row, column=column, adjust_kwargs=adjust)
 
     def _export_plot_figures_png(self, plot_figures, page_name):
         self.geometry(self.default_geometry)
@@ -1607,6 +2284,83 @@ class PolarizationGUI(tk.Tk):
     def export_compare_png(self):
         self._export_plot_figures_png(self.compare_plot_figures, 'compare')
 
+    def export_triple_png(self):
+        """Export all 4 triple comparison graphs (3 comparisons + 1 reference) into a single combined image."""
+        if not self.triple_plot_figures or len(self.triple_plot_figures) < 4:
+            self.status_label.config(text="No triple comparison graphs to export. Ensure calculation is complete.")
+            return
+        
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".png", 
+            filetypes=[("PNG files", "*.png")],
+            initialfile=f"triple_compare_plot_{self.triple_plot_index + 1}.png"
+        )
+        if not file_path:
+            return
+        
+        try:
+            # Get the 4 figures in order (should be in triple_plot_figures)
+            figs = list(self.triple_plot_figures.values())[:4]
+            
+            if len(figs) < 4:
+                self.status_label.config(text="Error: Not all 4 graphs available for export.")
+                return
+            
+            # Create a new figure with 2x2 subplots
+            combined_fig = plt.figure(figsize=(14, 12))
+            
+            # Get figure canvases and redraw them to ensure they're up to date
+            for fig in figs:
+                fig.canvas.draw()
+            
+            # Extract the image data from each figure and place into the combined figure
+            # We'll use matplotlib's FigureCanvasPNG to render each figure
+            from io import BytesIO
+            from PIL import Image as PILImage
+            
+            axes = []
+            for i in range(4):
+                ax = combined_fig.add_subplot(2, 2, i + 1)
+                axes.append(ax)
+            
+            # Convert each matplotlib figure to PIL image and paste into combined grid
+            pil_images = []
+            for fig in figs:
+                buf = BytesIO()
+                fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+                buf.seek(0)
+                pil_images.append(PILImage.open(buf))
+            
+            # Create combined image (2x2 grid)
+            img_width, img_height = pil_images[0].size
+            combined_pil = PILImage.new('RGB', (img_width * 2, img_height * 2), color='white')
+            
+            # Paste images in 2x2 grid
+            combined_pil.paste(pil_images[0], (0, 0))  # Top left
+            combined_pil.paste(pil_images[1], (img_width, 0))  # Top right
+            combined_pil.paste(pil_images[2], (0, img_height))  # Bottom left
+            combined_pil.paste(pil_images[3], (img_width, img_height))  # Bottom right
+            
+            # Add title
+            from PIL import ImageDraw, ImageFont
+            draw = ImageDraw.Draw(combined_pil)
+            plot_names = list(self.triple_plot_figures.keys())[:4]
+            title = f"Triple Comparison - Plot Type {self.triple_plot_index + 1}/6: {', '.join([p.replace('_', ' ').title()[:15] for p in plot_names])}"
+            draw.text((20, 20), title, fill='black')
+            
+            # Save combined image
+            combined_pil.save(file_path)
+            self.status_label.config(text=f"Combined triple comparison graph exported to PNG.")
+            
+            # Clean up
+            plt.close(combined_fig)
+            for img in pil_images:
+                img.close()
+                
+        except Exception as e:
+            self.status_label.config(text=f"Error exporting triple PNG: {str(e)}")
+
+
     def export_csv(self):
         if self.processor.pol_params is None:
             self.status_label.config(text="Calculate polarization first.")
@@ -1644,6 +2398,39 @@ class PolarizationGUI(tk.Tk):
                         row['docp_diff'], row['sat_diff']
                     ])
         self.status_label.config(text="Comparison results exported to CSV.")
+
+    def export_triple_csv(self):
+        if not self.triple_results or not self.triple_results.get('P1-P2'):
+            self.status_label.config(text="No triple comparison results to export.")
+            return
+        file_path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
+        if not file_path:
+            return
+        csv_base = file_path[:-4] if file_path.lower().endswith('.csv') else file_path
+        
+        # Export three separate CSV files for the three comparison pairs
+        pairs = ['P1-P2', 'P1-P3', 'P2-P3']
+        for pair in pairs:
+            with open(f"{csv_base}_{pair}.csv", mode='w', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                pol_type = self.triple_pol_var.get()
+                if pol_type == 'linear':
+                    writer.writerow(['file', 'az', 'ze', 'cze', 'exp', 'ISO', 'obs', 'DoLP_diff', 'DoLP_std_diff', 'AoLP_diff_deg', 'AoLP_std_diff', 'Sat_diff'])
+                    for row in self.triple_results[pair]:
+                        params = row['params']
+                        writer.writerow([
+                            params.get('file', ''), params['az'], params['ze'], params['cze'], params['exp'], params['ISO'], params['obs'],
+                            row['dolp_diff'], row['dolp_std_diff'], np.rad2deg(row['aolp_diff']), row['aolp_std_diff'], row['sat_diff']
+                        ])
+                else:
+                    writer.writerow(['file', 'az', 'ze', 'cze', 'exp', 'ISO', 'obs', 'DoCP_diff', 'DoCP_std_diff', 'Sat_diff'])
+                    for row in self.triple_results[pair]:
+                        params = row['params']
+                        writer.writerow([
+                            params.get('file', ''), params['az'], params['ze'], params['cze'], params['exp'], params['ISO'], params['obs'],
+                            row['docp_diff'], row['docp_std_diff'], row['sat_diff']
+                        ])
+        self.status_label.config(text="Triple comparison results exported to CSV (3 files).")
 
     def export_batch_csv(self):
         if not hasattr(self.processor, 'batch_results') or not self.processor.batch_results:
