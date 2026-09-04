@@ -49,6 +49,8 @@ class PolarizationGUI(tk.Tk):
         self.batch_point_size = tk.IntVar(value=20)
         self.compare_point_size = tk.IntVar(value=20)
         self.triple_point_size = tk.IntVar(value=20)
+        self.global_ranges = {'batch': None, 'compare': None, 'triple_compare': None}
+        self.plot_range_overrides = {'batch': {}, 'compare': {}, 'triple_compare': {}}
         self.page_buttons_frame = tk.Frame(self)
         self.page_buttons_frame.pack(fill=tk.X, padx=8, pady=4)
         tk.Button(self.page_buttons_frame, text="Single Image", command=self.show_single_page).pack(side=tk.LEFT, padx=4)
@@ -73,6 +75,72 @@ class PolarizationGUI(tk.Tk):
         self._create_triple_compare_page()
 
         self.show_single_page()
+
+    def _create_global_range_controls(self, parent, page):
+        tk.Label(parent, text="Global heat-map range:").pack(pady=(12, 2), anchor="w")
+        range_frame = tk.Frame(parent)
+        range_frame.pack(fill=tk.X, pady=2)
+        min_var = tk.StringVar()
+        max_var = tk.StringVar()
+        self.global_range_vars = getattr(self, 'global_range_vars', {})
+        self.global_range_vars[page] = (min_var, max_var)
+        tk.Label(range_frame, text="Min:").grid(row=0, column=0, sticky="w")
+        tk.Entry(range_frame, textvariable=min_var, width=9).grid(row=0, column=1, padx=3)
+        tk.Label(range_frame, text="Max:").grid(row=0, column=2, sticky="w")
+        tk.Entry(range_frame, textvariable=max_var, width=9).grid(row=0, column=3, padx=3)
+        tk.Button(
+            parent, text="Apply Global Range",
+            command=lambda: self.apply_global_range(page)
+        ).pack(fill=tk.X, pady=4)
+
+    def apply_global_range(self, page):
+        min_var, max_var = self.global_range_vars[page]
+        try:
+            range_min = float(min_var.get())
+            range_max = float(max_var.get())
+            if not np.isfinite(range_min) or not np.isfinite(range_max) or range_max <= range_min:
+                raise ValueError
+        except ValueError:
+            self.status_label.config(text="Global range must contain finite values with max greater than min.")
+            return
+
+        self.global_ranges[page] = (range_min, range_max)
+        self.plot_range_overrides[page].clear()
+        self._apply_main_plot_ranges(page)
+        self.status_label.config(text=f"Global heat-map range applied: {range_min:g} to {range_max:g}.")
+
+    def _apply_main_plot_ranges(self, page):
+        if page == 'batch':
+            data_store = self.batch_plot_data
+            figure_store = self.batch_plot_figures
+            canvas_store = self.batch_plot_canvases
+        elif page == 'compare':
+            data_store = self.compare_plot_data
+            figure_store = self.compare_plot_figures
+            canvas_store = self.compare_plot_canvases
+        else:
+            data_store = self.triple_plot_data
+            figure_store = self.triple_plot_figures
+            canvas_store = self.triple_plot_canvases
+
+        global_range = self.global_ranges[page]
+        for name, plot_data in data_store.items():
+            theta, radii, values, title, meta = plot_data
+            if name in self.plot_range_overrides[page]:
+                range_min, range_max = self.plot_range_overrides[page][name]
+            elif global_range is not None:
+                range_min, range_max = global_range
+            else:
+                continue
+
+            meta = dict(meta)
+            meta['vmin'] = range_min
+            meta['vmax'] = range_max
+            data_store[name] = (theta, radii, values, title, meta)
+            figure = figure_store.get(name)
+            if figure is not None and figure.axes and figure.axes[0].collections:
+                figure.axes[0].collections[0].set_clim(range_min, range_max)
+                self._redraw_canvas(canvas_store.get(name))
 
     def _create_single_page(self):
         self.left_frame = tk.Frame(self.page1_frame)
@@ -190,6 +258,7 @@ class PolarizationGUI(tk.Tk):
         tk.Label(self.batch_left_frame, text="Datapoint Size:").pack(pady=(12, 2), anchor="w")
         batch_size_scale = tk.Scale(self.batch_left_frame, from_=1, to=100, orient=tk.HORIZONTAL, variable=self.batch_point_size, command=lambda v: self.update_batch_plots())
         batch_size_scale.pack(fill=tk.X, pady=4)
+        self._create_global_range_controls(self.batch_left_frame, 'batch')
 
         self.batch_canvas = tk.Canvas(self.batch_grid_frame, bg="black")
         self.batch_canvas.grid(row=0, column=0, columnspan=3, sticky='nsew', padx=2, pady=2)
@@ -247,6 +316,7 @@ class PolarizationGUI(tk.Tk):
         tk.Label(self.compare_left_frame, text="Datapoint Size:").pack(pady=(12, 2), anchor="w")
         compare_size_scale = tk.Scale(self.compare_left_frame, from_=1, to=100, orient=tk.HORIZONTAL, variable=self.compare_point_size, command=lambda v: self.update_compare_plots())
         compare_size_scale.pack(fill=tk.X, pady=4)
+        self._create_global_range_controls(self.compare_left_frame, 'compare')
 
         self.compare_canvas = tk.Canvas(self.compare_grid_frame, bg="black")
         self.compare_canvas.grid(row=0, column=0, columnspan=3, sticky='nsew', padx=2, pady=2)
@@ -350,6 +420,7 @@ class PolarizationGUI(tk.Tk):
         tk.Label(self.triple_left_frame, text="Datapoint Size:").pack(pady=(12, 2), anchor="w")
         triple_size_scale = tk.Scale(self.triple_left_frame, from_=1, to=100, orient=tk.HORIZONTAL, variable=self.triple_point_size, command=lambda v: self.update_triple_plots())
         triple_size_scale.pack(fill=tk.X, pady=4)
+        self._create_global_range_controls(self.triple_left_frame, 'triple_compare')
 
         # Navigation frame with arrows (moved below export buttons)
         self.triple_nav_frame = tk.Frame(self.triple_left_frame)
@@ -1279,6 +1350,8 @@ class PolarizationGUI(tk.Tk):
             self.batch_plot_data['cpr'] = (theta, radii, cpr_plot_vals, 'Circular Polarisation Ratio (RH/LH)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2,0)})
             self._draw_batch_plot(fig4, 'cpr', row=2, column=0)
 
+        self._apply_main_plot_ranges('batch')
+
     def _redraw_canvas(self, canvas):
         if canvas is None:
             return
@@ -1689,6 +1762,7 @@ class PolarizationGUI(tk.Tk):
             render_isolated_plot(cmap, vmin_new, vmax_new)
 
             # persist metadata
+            self.plot_range_overrides[page][attr_name] = (float(vmin_new), float(vmax_new))
             meta_new = {'low_color': low, 'middle_color': middle, 'high_color': high, 'vmin': float(vmin_new), 'vmax': float(vmax_new), 'cmap': 'custom', 'pos': meta.get('pos', (1,0))}
             data_store[attr_name] = (theta, radii, values, title, meta_new)
 
@@ -1756,6 +1830,7 @@ class PolarizationGUI(tk.Tk):
                     theta, radii, values, cmap=cmap, title=title,
                     vmin=vmin_new, vmax=vmax_new, size=main_point_size
                 )
+                self.plot_range_overrides[page][attr_name] = (float(vmin_new), float(vmax_new))
                 meta_new = {'low_color': low, 'middle_color': middle, 'high_color': high, 'vmin': float(vmin_new), 'vmax': float(vmax_new), 'cmap': 'custom', 'pos': meta.get('pos', (1,0))}
                 data_store[attr_name] = (theta, radii, values, title, meta_new)
                 fig_store[attr_name] = new_fig
@@ -1943,6 +2018,8 @@ class PolarizationGUI(tk.Tk):
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
             self.compare_plot_data['cpr_diff'] = (theta, radii, cpr_plot_vals, 'Circular Polarisation Ratio diff', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2,0)})
             self._draw_compare_plot(fig4, 'cpr_diff', row=2, column=0)
+
+        self._apply_main_plot_ranges('compare')
 
     def update_triple_plots(self):
         """Update triple comparison plots. Shows 4 plots in 2x2 grid: 3 comparisons + 1 dataset 1 reference."""
@@ -2214,6 +2291,7 @@ class PolarizationGUI(tk.Tk):
                 fig_ref = self._make_polar_scatter_fig(theta, radii, ref_vals, cmap_name, 'Saturation - Dataset 1 Reference', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
                 self._draw_triple_plot(fig_ref, 'sat_ref_d1', row=1, column=1)
 
+        self._apply_main_plot_ranges('triple_compare')
         self.triple_plot_type_label.config(text=f"Plot Type: {self.triple_plot_index + 1}/6")
 
 
@@ -2346,7 +2424,7 @@ class PolarizationGUI(tk.Tk):
             draw = ImageDraw.Draw(combined_pil)
             plot_names = list(self.triple_plot_figures.keys())[:4]
             title = f"Triple Comparison - Plot Type {self.triple_plot_index + 1}/6: {', '.join([p.replace('_', ' ').title()[:15] for p in plot_names])}"
-            draw.text((20, 20), title, fill='black')
+            #draw.text((20, 20), title, fill='black') #if you want to the title on the exported graphs.
             
             # Save combined image
             combined_pil.save(file_path)
