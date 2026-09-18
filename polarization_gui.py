@@ -9,6 +9,7 @@ from PIL import Image, ImageTk
 from matplotlib import pyplot as plt
 from matplotlib import colors as mcolors
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import os
 import time
 from analysis import PolarizationProcessor
 
@@ -1350,6 +1351,21 @@ class PolarizationGUI(tk.Tk):
             self.batch_plot_data['cpr'] = (theta, radii, cpr_plot_vals, 'Circular Polarisation Ratio (RH/LH)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2,0)})
             self._draw_batch_plot(fig4, 'cpr', row=2, column=0)
 
+        # attach source file lists to each plot's metadata for reliable datapoint->file mapping
+        try:
+            files = getattr(self.processor, 'batch_files', None)
+            if files:
+                for k, v in list(self.batch_plot_data.items()):
+                    try:
+                        theta, radii, values, title, meta = v
+                        meta2 = dict(meta)
+                        meta2['files'] = files
+                        self.batch_plot_data[k] = (theta, radii, values, title, meta2)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
         self._apply_main_plot_ranges('batch')
 
     def _redraw_canvas(self, canvas):
@@ -1475,6 +1491,41 @@ class PolarizationGUI(tk.Tk):
         canvas = FigureCanvasTkAgg(fig, master=plot_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # make scatter points reliably click-selectable even when the scatter artist is not the first collection
+        try:
+            ax = fig.axes[0]
+            all_collections = list(getattr(ax, 'collections', []))
+            if not all_collections:
+                raise RuntimeError('No scatter collections on axis')
+
+            def _on_click(event):
+                try:
+                    if event.inaxes is not ax:
+                        return
+                    # find nearest plotted point to the click in polar coordinates
+                    best_idx = None
+                    best_dist = None
+                    for artist in all_collections:
+                        offsets = getattr(artist, 'get_offsets', lambda: None)()
+                        if offsets is None or len(offsets) == 0:
+                            continue
+                        if event.xdata is None or event.ydata is None:
+                            continue
+                        deltas = offsets - np.array([event.xdata, event.ydata])
+                        dist = np.hypot(deltas[:, 0], deltas[:, 1])
+                        candidate = int(np.argmin(dist))
+                        if best_dist is None or dist[candidate] < best_dist:
+                            best_dist = float(dist[candidate])
+                            best_idx = candidate
+                    if best_idx is not None:
+                        self._open_datapoint_images(attr_name, page, best_idx)
+                except Exception:
+                    pass
+
+            fig.canvas.mpl_connect('button_press_event', _on_click)
+        except Exception:
+            pass
 
         controls_frame = tk.Frame(win)
         controls_frame.pack(fill=tk.X, padx=6, pady=6)
@@ -2019,6 +2070,21 @@ class PolarizationGUI(tk.Tk):
             self.compare_plot_data['cpr_diff'] = (theta, radii, cpr_plot_vals, 'Circular Polarisation Ratio diff', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2,0)})
             self._draw_compare_plot(fig4, 'cpr_diff', row=2, column=0)
 
+        try:
+            files1 = getattr(self.batch_processor1, 'batch_files', None)
+            files2 = getattr(self.batch_processor2, 'batch_files', None)
+            if files1 and files2:
+                for k, v in list(self.compare_plot_data.items()):
+                    try:
+                        theta, radii, values, title, meta = v
+                        meta2 = dict(meta)
+                        meta2['files'] = (files1, files2)
+                        self.compare_plot_data[k] = (theta, radii, values, title, meta2)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
         self._apply_main_plot_ranges('compare')
 
     def update_triple_plots(self):
@@ -2291,6 +2357,22 @@ class PolarizationGUI(tk.Tk):
                 fig_ref = self._make_polar_scatter_fig(theta, radii, ref_vals, cmap_name, 'Saturation - Dataset 1 Reference', vmin=vmin_val, vmax=vmax_val, size=self.triple_point_size.get())
                 self._draw_triple_plot(fig_ref, 'sat_ref_d1', row=1, column=1)
 
+        try:
+            files1 = getattr(self.triple_processor1, 'batch_files', None)
+            files2 = getattr(self.triple_processor2, 'batch_files', None)
+            files3 = getattr(self.triple_processor3, 'batch_files', None)
+            if files1 and files2 and files3:
+                for k, v in list(self.triple_plot_data.items()):
+                    try:
+                        theta, radii, values, title, meta = v
+                        meta2 = dict(meta)
+                        meta2['files'] = (files1, files2, files3)
+                        self.triple_plot_data[k] = (theta, radii, values, title, meta2)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
         self._apply_main_plot_ranges('triple_compare')
         self.triple_plot_type_label.config(text=f"Plot Type: {self.triple_plot_index + 1}/6")
 
@@ -2522,6 +2604,146 @@ class PolarizationGUI(tk.Tk):
             self.status_label.config(text="Batch results exported to CSV.")
         else:
             self.status_label.config(text="Failed to export batch CSV.")
+
+    def _open_datapoint_images(self, attr_name, page, point_index):
+        """Open the image or image pair/triple that corresponds to a clicked isolated plot datapoint."""
+        try:
+            if page == 'batch':
+                data = self.batch_plot_data.get(attr_name)
+                if data is None:
+                    return
+                theta, radii, values, title, meta = data
+                files = meta.get('files') or getattr(self.processor, 'batch_files', None)
+                if not files:
+                    return
+                n = len(theta) // 2 if len(theta) > 1 else len(theta)
+                idx = point_index if point_index < n else point_index - n
+                if idx < 0 or idx >= len(files):
+                    return
+                self.display_image_from_path(files[idx])
+                return
+
+            if page == 'compare':
+                data = self.compare_plot_data.get(attr_name)
+                if data is None:
+                    return
+                theta, radii, values, title, meta = data
+                files_pair = meta.get('files') or (getattr(self.batch_processor1, 'batch_files', None), getattr(self.batch_processor2, 'batch_files', None))
+                if not isinstance(files_pair, tuple) or len(files_pair) != 2:
+                    return
+                files1, files2 = files_pair
+                n = len(theta) // 2 if len(theta) > 1 else len(theta)
+                idx = point_index if point_index < n else point_index - n
+                if idx < 0 or idx >= len(files1) or idx >= len(files2):
+                    return
+                self._display_images_compare_window([files1[idx], files2[idx]])
+                return
+
+            if page == 'triple_compare':
+                data = self.triple_plot_data.get(attr_name)
+                if data is None:
+                    return
+                theta, radii, values, title, meta = data
+                files_list = meta.get('files')
+                if not files_list:
+                    files_list = [getattr(self.triple_processor1, 'batch_files', None), getattr(self.triple_processor2, 'batch_files', None), getattr(self.triple_processor3, 'batch_files', None)]
+                if not isinstance(files_list, (list, tuple)) or len(files_list) != 3:
+                    return
+                files1, files2, files3 = files_list
+                n = len(theta) // 2 if len(theta) > 1 else len(theta)
+                idx = point_index if point_index < n else point_index - n
+                if idx < 0 or idx >= len(files1) or idx >= len(files2) or idx >= len(files3):
+                    return
+                self._display_images_compare_window([files1[idx], files2[idx], files3[idx]])
+        except Exception:
+            return
+
+    def display_image_from_path(self, file_path):
+        """Load an image into the single-image analysis page and switch to it."""
+        try:
+            if not file_path:
+                return
+            success = self.processor.load_image(file_path)
+            if success:
+                self.show_single_page()
+                self.resize_image()
+                self.status_label.config(text=f"Opened image: {os.path.basename(file_path)}")
+        except Exception:
+            pass
+
+    def _display_images_compare_window(self, file_paths):
+        """Open a Toplevel window with 2 or 3 images, overlay and cycle controls."""
+        try:
+            win = tk.Toplevel(self)
+            win.title("Image comparison")
+            win.geometry('1100x700')
+
+            frame = tk.Frame(win)
+            frame.pack(fill=tk.BOTH, expand=True)
+
+            canvases = []
+            pil_images = []
+            for i, fp in enumerate(file_paths):
+                try:
+                    img = Image.open(fp).convert('RGBA')
+                except Exception:
+                    img = Image.new('RGBA', (512, 512), (0, 0, 0, 255))
+                pil_images.append(img)
+                c = tk.Canvas(frame, bg='black', width=320, height=240)
+                c.grid(row=0, column=i, sticky='nsew', padx=4, pady=4)
+                canvases.append(c)
+
+            def render_all(alpha=0.5, overlay=False, primary=0):
+                for i, (c, img) in enumerate(zip(canvases, pil_images)):
+                    w = max(1, c.winfo_width() or 320)
+                    h = max(1, c.winfo_height() or 240)
+                    if overlay and i != primary and len(pil_images) > primary:
+                        base = pil_images[primary].resize((w, h), Image.LANCZOS)
+                        top = img.resize((w, h), Image.LANCZOS)
+                        composed = Image.blend(base, top, alpha=alpha)
+                        tkimg = ImageTk.PhotoImage(composed)
+                    else:
+                        tkimg = ImageTk.PhotoImage(img.resize((w, h), Image.LANCZOS))
+                    c.image = tkimg
+                    c.delete('all')
+                    c.create_image(0, 0, anchor=tk.NW, image=tkimg)
+
+            controls_frame = tk.Frame(win)
+            controls_frame.pack(fill=tk.X, padx=6, pady=6)
+
+            overlay_var = tk.BooleanVar(value=False)
+            primary_idx = tk.IntVar(value=0)
+            alpha_var = tk.DoubleVar(value=0.5)
+
+            def toggle_overlay():
+                render_all(alpha=alpha_var.get(), overlay=overlay_var.get(), primary=primary_idx.get())
+
+            tk.Checkbutton(controls_frame, text='Overlay', variable=overlay_var, command=toggle_overlay).pack(side=tk.LEFT, padx=6)
+            tk.Label(controls_frame, text='Alpha:').pack(side=tk.LEFT)
+            alpha_scale = tk.Scale(controls_frame, from_=0.0, to=1.0, resolution=0.01, orient=tk.HORIZONTAL, variable=alpha_var, command=lambda _v: toggle_overlay())
+            alpha_scale.pack(side=tk.LEFT, padx=6)
+
+            def next_primary():
+                primary_idx.set((primary_idx.get() + 1) % len(pil_images))
+                toggle_overlay()
+
+            def prev_primary():
+                primary_idx.set((primary_idx.get() - 1) % len(pil_images))
+                toggle_overlay()
+
+            tk.Button(controls_frame, text='Prev', command=prev_primary).pack(side=tk.LEFT, padx=6)
+            tk.Button(controls_frame, text='Next', command=next_primary).pack(side=tk.LEFT, padx=6)
+
+            def open_in_single():
+                idx = primary_idx.get()
+                if idx < len(file_paths):
+                    self.display_image_from_path(file_paths[idx])
+
+            tk.Button(controls_frame, text='Open Selected in Single Page', command=open_in_single).pack(side=tk.RIGHT, padx=6)
+            win.update_idletasks()
+            render_all()
+        except Exception:
+            return
 
     def mirror_array(self, array):
         mirrored_array = array.copy()
