@@ -147,22 +147,63 @@ class PolarizationGUI(tk.Tk):
             canvas_store = self.triple_plot_canvases
 
         global_range = self.global_ranges[page]
-        for name, plot_data in data_store.items():
+        for name, plot_data in list(data_store.items()):
             theta, radii, values, title, meta = plot_data
-            if name in self.plot_range_overrides[page]:
-                range_min, range_max = self.plot_range_overrides[page][name]
+            override = self.plot_range_overrides[page].get(name)
+            if isinstance(override, dict):
+                range_min = float(override.get('vmin', meta.get('vmin', 0.0)))
+                range_max = float(override.get('vmax', meta.get('vmax', 1.0)))
+                low_color = override.get('low_color', meta.get('low_color', '#0000ff'))
+                middle_color = override.get('middle_color', meta.get('middle_color', '#ffffff'))
+                high_color = override.get('high_color', meta.get('high_color', '#ff0000'))
+                cmap_name = override.get('cmap', meta.get('cmap', 'viridis'))
+                if cmap_name == 'custom':
+                    cmap_obj = self._make_custom_colormap(low_color, middle_color, high_color)
+                else:
+                    cmap_obj = self._get_plot_colormap(cmap_name) if cmap_name is not None else None
+                meta = dict(meta)
+                meta.update({
+                    'vmin': range_min,
+                    'vmax': range_max,
+                    'low_color': low_color,
+                    'middle_color': middle_color,
+                    'high_color': high_color,
+                    'cmap': 'custom' if cmap_name == 'custom' else cmap_name,
+                })
+            elif isinstance(override, (tuple, list)) and len(override) == 2:
+                range_min, range_max = override
+                meta = dict(meta)
+                meta['vmin'] = range_min
+                meta['vmax'] = range_max
+                cmap_obj = self._get_plot_colormap(meta.get('cmap', 'viridis')) if meta.get('cmap') not in (None, 'custom') else self._make_custom_colormap(meta.get('low_color', '#0000ff'), meta.get('middle_color', '#ffffff'), meta.get('high_color', '#ff0000'))
             elif global_range is not None:
                 range_min, range_max = global_range
+                meta = dict(meta)
+                meta['vmin'] = range_min
+                meta['vmax'] = range_max
+                cmap_obj = self._get_plot_colormap(meta.get('cmap', 'viridis')) if meta.get('cmap') not in (None, 'custom') else self._make_custom_colormap(meta.get('low_color', '#0000ff'), meta.get('middle_color', '#ffffff'), meta.get('high_color', '#ff0000'))
             else:
                 continue
 
-            meta = dict(meta)
-            meta['vmin'] = range_min
-            meta['vmax'] = range_max
             data_store[name] = (theta, radii, values, title, meta)
+
             figure = figure_store.get(name)
-            if figure is not None and figure.axes and figure.axes[0].collections:
-                figure.axes[0].collections[0].set_clim(range_min, range_max)
+            if figure is not None:
+                for ax in figure.axes:
+                    for collection in getattr(ax, 'collections', []):
+                        if cmap_obj is not None:
+                            try:
+                                collection.set_cmap(cmap_obj)
+                            except Exception:
+                                pass
+                        try:
+                            collection.set_clim(range_min, range_max)
+                        except Exception:
+                            pass
+                try:
+                    figure.canvas.draw_idle()
+                except Exception:
+                    pass
                 self._redraw_canvas(canvas_store.get(name))
 
     def _create_single_page(self):
@@ -895,11 +936,10 @@ class PolarizationGUI(tk.Tk):
             if figures_store is not None:
                 self.single_plot_figures[attr_name] = fig
 
-        # Bind click event for interactive isolation when canvas_store is used (batch/compare)
+        # Bind click events for interactive isolation and datapoint menus.
         try:
             if canvas_store is not None:
-                widget = canvas.get_tk_widget()
-                widget.bind('<Button-1>', lambda event, name=attr_name, store=canvas_store: self.on_plot_click(name, store))
+                canvas.mpl_connect('button_press_event', lambda event, name=attr_name, store=canvas_store: self.on_plot_click(name, store, event))
         except Exception:
             pass
 
@@ -1484,7 +1524,7 @@ class PolarizationGUI(tk.Tk):
         adjust = {'left': 0.15, 'right': 0.75, 'top': 0.80, 'bottom': 0.12, 'pad': 1.5}
         self._draw_plot_generic(fig, master_frame=self.compare_grid_frame, canvas_store=self.compare_plot_canvases, figures_store=self.compare_plot_figures, attr_name=attr_name, row=row, column=column, adjust_kwargs=adjust)
 
-    def on_plot_click(self, attr_name, store):
+    def on_plot_click(self, attr_name, store, event=None):
         # Determine whether this is a batch, compare, or triple compare plot
         page = None
         if store is self.batch_plot_canvases:
@@ -1495,7 +1535,46 @@ class PolarizationGUI(tk.Tk):
             page = 'triple_compare'
         else:
             return
+
+        if event is not None and getattr(event, 'button', None) == 3:
+            try:
+                choices = self._get_plot_point_file_choices(attr_name, page, self._resolve_click_point_index(event, attr_name, page))
+                if not choices:
+                    return
+                if len(choices) == 1:
+                    self.display_image_from_path(choices[0])
+                    return
+                menu = tk.Menu(self, tearoff=0)
+                for path in choices:
+                    label = os.path.basename(path) if path else '<unknown>'
+                    menu.add_command(label=label, command=lambda p=path: self.display_image_from_path(p))
+                gui_event = getattr(event, 'guiEvent', None)
+                if gui_event is not None:
+                    menu.post(gui_event.x_root, gui_event.y_root)
+                else:
+                    widget = self.winfo_children()[0] if self.winfo_children() else None
+                    if widget is not None:
+                        menu.post(widget.winfo_rootx() + int(event.x), widget.winfo_rooty() + int(event.y))
+                return
+            except Exception:
+                pass
+
         self.open_plot_isolation(attr_name, page)
+
+    def _resolve_click_point_index(self, event, attr_name, page):
+        try:
+            if event is None or getattr(event, 'inaxes', None) is None:
+                return 0
+            axes = event.inaxes
+            for collection in getattr(axes, 'collections', []):
+                offsets = collection.get_offsets()
+                if offsets is None or len(offsets) == 0:
+                    continue
+                dists = np.hypot(offsets[:, 0] - event.xdata, offsets[:, 1] - event.ydata)
+                return int(np.argmin(dists))
+        except Exception:
+            pass
+        return 0
 
     def open_interactive_isolation_plot(self, theta, radii, values, title, meta, page='batch', attr_name=None):
         """Open the isolation window with a polar heat map and a draggable angle selector.
@@ -1604,15 +1683,14 @@ class PolarizationGUI(tk.Tk):
                 if np.any(mask):
                     plot_x = np.asarray(phase_x, dtype=float)[mask]
                     plot_y = np.asarray(phase_y, dtype=float)[mask]
-                    # FIX: sort by actual x values
                     plot_order = np.argsort(plot_x, kind='mergesort')
                     ax_phase.plot(plot_x[plot_order], plot_y[plot_order], color=colors[idx], lw=2, label=label)
-                    if len(lines) > 1:
-                        ax_phase.legend(loc='best')
-                    if lines:
-                        all_x = np.concatenate([np.asarray(xs, dtype=float) for _, xs, _, _ in lines])
-                        if np.size(all_x) > 0:
-                            ax_phase.set_xlim(0.0, max(float(np.nanmax(all_x)), 1.0))
+            if len(lines) > 1:
+                ax_phase.legend(loc='best')
+            if lines:
+                all_x = np.concatenate([np.asarray(xs, dtype=float) for _, xs, _, _ in lines])
+                if np.size(all_x) > 0:
+                    ax_phase.set_xlim(0.0, max(float(np.nanmax(all_x)), 1.0))
             fig.canvas.draw_idle()
 
         state = {'is_dragging': False}
@@ -1630,55 +1708,31 @@ class PolarizationGUI(tk.Tk):
             outer_handle.set_offsets(np.column_stack([[selected_angle['value']], [max_r]]))
             fig.canvas.draw_idle()
 
-        def resolve_right_click_file(event):
+        def resolve_right_click_choices(event):
             if event.inaxes != ax_polar or event.xdata is None or event.ydata is None:
-                return None
-            if page == 'batch':
-                files = meta.get('files') or getattr(self.processor, 'batch_files', [])
-            elif page == 'compare':
-                files1 = getattr(self.batch_processor1, 'batch_files', [])
-                files2 = getattr(self.batch_processor2, 'batch_files', [])
-                files = (files1, files2)
-            else:
-                files = [getattr(self.triple_processor1, 'batch_files', []), getattr(self.triple_processor2, 'batch_files', []), getattr(self.triple_processor3, 'batch_files', [])]
-
-            if not isinstance(files, (list, tuple)) or len(files) == 0:
-                return None
+                return []
             offsets = scatter.get_offsets()
             if offsets is None or len(offsets) == 0:
-                return None
+                return []
             dists = np.hypot(offsets[:, 0] - event.xdata, offsets[:, 1] - event.ydata)
             point_index = int(np.argmin(dists))
-            if page == 'batch':
-                index = self._resolve_plot_point_index(point_index, len(offsets), len(files))
-                if index is None:
-                    return None
-                return files[index]
-            if page == 'compare':
-                files1, files2 = files
-                file_count = min(len(files1), len(files2)) if files1 and files2 else 0
-                if file_count <= 0:
-                    return None
-                index = self._resolve_plot_point_index(point_index, len(offsets), file_count)
-                if index is None:
-                    return None
-                return [files1[index], files2[index]][0]
-            files1, files2, files3 = files
-            file_count = min(len(files1), len(files2), len(files3)) if files1 and files2 and files3 else 0
-            if file_count <= 0:
-                return None
-            index = self._resolve_plot_point_index(point_index, len(offsets), file_count)
-            if index is None:
-                return None
-            return [files1[index], files2[index], files3[index]][0]
+            return self._get_plot_point_file_choices(attr_name, page, point_index)
 
         def on_press(event):
             if event.inaxes != ax_polar or event.xdata is None or event.ydata is None:
                 return
             if event.button == 3:
-                path = resolve_right_click_file(event)
-                if path:
-                    self.display_image_from_path(path)
+                choices = resolve_right_click_choices(event)
+                if not choices:
+                    return
+                if len(choices) == 1:
+                    self.display_image_from_path(choices[0])
+                    return
+                menu = tk.Menu(iso_win, tearoff=0)
+                for path in choices:
+                    label = os.path.basename(path) if path else '<unknown>'
+                    menu.add_command(label=label, command=lambda p=path: self.display_image_from_path(p))
+                menu.post(iso_win.winfo_pointerx(), iso_win.winfo_pointery())
                 return
             if abs(float(event.ydata) - max_r) <= drag_limit:
                 state['is_dragging'] = True
@@ -1718,57 +1772,53 @@ class PolarizationGUI(tk.Tk):
             if attr_name is None:
                 return
             current_min, current_max = range_slider.get_range()
-            current_cmap = self._make_custom_colormap(low_color_var.get(), middle_color_var.get(), high_color_var.get())
-            new_meta = dict(meta)
-            new_meta.update({
+            override = {
                 'low_color': low_color_var.get(),
                 'middle_color': middle_color_var.get(),
                 'high_color': high_color_var.get(),
                 'vmin': float(current_min),
                 'vmax': float(current_max),
                 'cmap': 'custom',
-            })
-            self.plot_range_overrides[page][attr_name] = (float(current_min), float(current_max))
+            }
+            self.plot_range_overrides[page][attr_name] = override
             if page == 'batch':
-                self.batch_plot_data[attr_name] = (theta_arr, radii_arr, values_arr, title, new_meta)
+                self.batch_plot_data[attr_name] = (theta_arr, radii_arr, values_arr, title, dict(meta, **override))
                 self.update_batch_plots()
+                self._apply_main_plot_ranges('batch')
             elif page == 'compare':
-                self.compare_plot_data[attr_name] = (theta_arr, radii_arr, values_arr, title, new_meta)
+                self.compare_plot_data[attr_name] = (theta_arr, radii_arr, values_arr, title, dict(meta, **override))
                 self.update_compare_plots()
+                self._apply_main_plot_ranges('compare')
             elif page == 'triple_compare':
-                self.triple_plot_data[attr_name] = (theta_arr, radii_arr, values_arr, title, new_meta)
+                self.triple_plot_data[attr_name] = (theta_arr, radii_arr, values_arr, title, dict(meta, **override))
                 self.update_triple_plots()
+                self._apply_main_plot_ranges('triple_compare')
 
         def redraw_heatmap():
-            nonlocal clock_hand, cbar, outer_handle
+            nonlocal clock_hand, cbar, outer_handle, ax_polar, ax_phase, scatter
             current_min, current_max = range_slider.get_range()
             vmin_new = float(current_min)
             vmax_new = float(current_max)
             current_cmap = self._make_custom_colormap(low_color_var.get(), middle_color_var.get(), high_color_var.get())
-            for collection in list(ax_polar.collections):
-                if collection is not outer_handle:
-                    try:
-                        collection.remove()
-                    except Exception:
-                        pass
-            sc = ax_polar.scatter(theta_arr, radii_arr, c=values_arr, cmap=current_cmap, vmin=vmin_new, vmax=vmax_new, s=20, zorder=2)
+
+            # Full redraw prevents the isolation figure from accumulating stale artists
+            # and shrinking the plot each time the heatmap is reapplied.
+            fig.clf()
+            ax_polar = fig.add_subplot(121, projection='polar')
+            ax_phase = fig.add_subplot(122)
+
+            scatter = ax_polar.scatter(theta_arr, radii_arr, c=values_arr, cmap=current_cmap, vmin=vmin_new, vmax=vmax_new, s=20, zorder=2)
             ax_polar.set_title(title)
             ax_polar.set_ylim(0, max_r * 1.1)
-            if cbar is not None:
-                try:
-                    if cbar.ax in fig.axes:
-                        cbar.remove()
-                except Exception:
-                    pass
-                cbar = None
-            cbar = fig.colorbar(sc, ax=ax_polar, pad=0.10)
-            try:
-                outer_handle.remove()
-            except Exception:
-                pass
+            cbar = fig.colorbar(scatter, ax=ax_polar, pad=0.10)
+            clock_hand, = ax_polar.plot([selected_angle['value'], selected_angle['value']], [0.0, max_r], color='black', linewidth=2.5, linestyle='--', zorder=3)
             outer_handle = ax_polar.scatter([selected_angle['value']], [max_r], s=60, color='red', edgecolors='black', zorder=4)
-            clock_hand.set_xdata([selected_angle['value'], selected_angle['value']])
-            clock_hand.set_ydata([0.0, max_r])
+
+            ax_phase.set_title('DoLP vs phase angle')
+            ax_phase.set_xlabel('Phase angle (deg)')
+            ax_phase.set_ylabel('DoLP (%)')
+            ax_phase.grid(True, alpha=0.3)
+            plot_selected_slice()
             fig.canvas.draw_idle()
 
         class RangeSlider(tk.Frame):
@@ -2213,18 +2263,22 @@ class PolarizationGUI(tk.Tk):
         max_box.bind('<FocusOut>', boxes_to_slider)
         range_slider.on_change = slider_to_boxes
 
+        cbar = None
+
         def render_isolated_plot(cmap, vmin_value, vmax_value):
-            isolated_fig = self._make_polar_scatter_fig(
-                theta, radii, values, cmap=cmap, title=title,
-                vmin=vmin_value, vmax=vmax_value,
-                size=isolation_point_size.get()
-            )
-            for child in plot_frame.winfo_children():
-                child.destroy()
-            isolated_canvas = FigureCanvasTkAgg(isolated_fig, master=plot_frame)
-            isolated_canvas.draw()
-            isolated_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-            return isolated_fig
+            nonlocal cbar
+            scatter.set_cmap(cmap)
+            scatter.set_clim(vmin_value, vmax_value)
+            scatter.set_sizes([isolation_point_size.get()] * len(scatter.get_offsets()))
+            if cbar is not None:
+                try:
+                    cbar.remove()
+                except Exception:
+                    pass
+                cbar = None
+            cbar = fig.colorbar(scatter, ax=ax_polar, pad=0.10)
+            fig.canvas.draw_idle()
+            return fig
 
         def update_isolation_point_size(value=None):
             try:
@@ -2264,66 +2318,36 @@ class PolarizationGUI(tk.Tk):
                 vmin_new, vmax_new = get_typed_range()
             except ValueError:
                 return
-            # build colormap
             cmap = self._make_custom_colormap(low, middle, high)
-            # update gradient on slider to reflect new colors
             try:
                 range_slider.update_colors(low, middle, high)
             except Exception:
                 pass
 
-            # Redraw the isolated plot using its local point-size setting.
-            render_isolated_plot(cmap, vmin_new, vmax_new)
+            # Update the existing Matplotlib figure instead of destroying the whole plot panel.
+            scatter.set_cmap(cmap)
+            scatter.set_clim(vmin_new, vmax_new)
+            scatter.set_sizes([isolation_point_size.get()] * len(scatter.get_offsets()))
+            if cbar is not None:
+                try:
+                    cbar.remove()
+                except Exception:
+                    pass
+                cbar = None
+            cbar = fig.colorbar(scatter, ax=ax_polar, pad=0.10)
+            fig.canvas.draw_idle()
 
-            # persist metadata
             self.plot_range_overrides[page][attr_name] = (float(vmin_new), float(vmax_new))
             meta_new = {'low_color': low, 'middle_color': middle, 'high_color': high, 'vmin': float(vmin_new), 'vmax': float(vmax_new), 'cmap': 'custom', 'pos': meta.get('pos', (1,0))}
             data_store[attr_name] = (theta, radii, values, title, meta_new)
 
-            # update stored figure and redraw in main UI without stealing focus
-            main_fig = self._make_polar_scatter_fig(
-                theta, radii, values, cmap=cmap, title=title,
-                vmin=vmin_new, vmax=vmax_new, size=main_point_size
-            )
-            fig_store[attr_name] = main_fig
             if page == 'batch':
-                try:
-                    self._clear_batch_plot_canvas(attr_name)
-                except Exception:
-                    pass
-                try:
-                    r,c = meta_new.get('pos', (1,0))
-                    self._draw_batch_plot(main_fig, attr_name, row=r, column=c)
-                except Exception:
-                    pass
+                self.update_batch_plots()
             elif page == 'compare':
-                try:
-                    existing = self.compare_plot_canvases.get(attr_name)
-                    if existing is not None:
-                        existing.get_tk_widget().destroy()
-                        del self.compare_plot_canvases[attr_name]
-                except Exception:
-                    pass
-                try:
-                    r,c = meta_new.get('pos', (1,0))
-                    self._draw_compare_plot(main_fig, attr_name, row=r, column=c)
-                except Exception:
-                    pass
+                self.update_compare_plots()
             elif page == 'triple_compare':
-                try:
-                    existing = self.triple_plot_canvases.get(attr_name)
-                    if existing is not None:
-                        existing.get_tk_widget().destroy()
-                        del self.triple_plot_canvases[attr_name]
-                except Exception:
-                    pass
-                try:
-                    r, c = meta_new.get('pos', (1, 0))
-                    self._draw_triple_plot(main_fig, attr_name, row=r, column=c)
-                except Exception:
-                    pass
+                self.update_triple_plots()
 
-            # keep isolation window focused so user can continue adjusting
             try:
                 win.focus_force()
                 controls_frame.focus_set()
@@ -3081,56 +3105,62 @@ class PolarizationGUI(tk.Tk):
             return None
         return idx
 
-    def _open_datapoint_images(self, attr_name, page, point_index):
+    def _get_plot_point_file_choices(self, attr_name, page, point_index):
         try:
             if page == 'batch':
                 data = self.batch_plot_data.get(attr_name)
                 if data is None:
-                    return
+                    return []
                 theta, radii, values, title, meta = data
                 files = meta.get('files') or getattr(self.processor, 'batch_files', None)
                 if not files:
-                    return
+                    return []
                 idx = self._resolve_plot_point_index(point_index, len(theta), len(files))
                 if idx is None:
-                    return
-                self._display_images_compare_window([files[idx]], selected_index=0)
-                return
+                    return []
+                return [files[idx]]
 
             if page == 'compare':
                 data = self.compare_plot_data.get(attr_name)
                 if data is None:
-                    return
+                    return []
                 theta, radii, values, title, meta = data
                 files_pair = meta.get('files') or (getattr(self.batch_processor1, 'batch_files', None), getattr(self.batch_processor2, 'batch_files', None))
                 if not isinstance(files_pair, tuple) or len(files_pair) != 2:
-                    return
+                    return []
                 files1, files2 = files_pair
                 idx = self._resolve_plot_point_index(point_index, len(theta), min(len(files1), len(files2)))
                 if idx is None:
-                    return
-                selected_paths = [files1[idx], files2[idx]]
-                self._display_images_compare_window([p for p in selected_paths if p], selected_index=0)
-                return
+                    return []
+                return [files1[idx], files2[idx]]
 
             if page == 'triple_compare':
                 data = self.triple_plot_data.get(attr_name)
                 if data is None:
-                    return
+                    return []
                 theta, radii, values, title, meta = data
                 files_list = meta.get('files')
                 if not files_list:
                     files_list = [getattr(self.triple_processor1, 'batch_files', None), getattr(self.triple_processor2, 'batch_files', None), getattr(self.triple_processor3, 'batch_files', None)]
                 if not isinstance(files_list, (list, tuple)) or len(files_list) != 3:
-                    return
+                    return []
                 files1, files2, files3 = files_list
-                idx = self._resolve_plot_point_index(point_index, len(theta), len(files1))
+                idx = self._resolve_plot_point_index(point_index, len(theta), min(len(files1), len(files2), len(files3)))
                 if idx is None:
-                    return
-                selected_paths = [files1[idx], files2[idx], files3[idx]]
-                self._display_images_compare_window([p for p in selected_paths if p], selected_index=0)
+                    return []
+                return [files1[idx], files2[idx], files3[idx]]
         except Exception:
+            return []
+        return []
+
+    def _open_datapoint_images(self, attr_name, page, point_index):
+        choices = self._get_plot_point_file_choices(attr_name, page, point_index)
+        if not choices:
             return
+        if len(choices) == 1:
+            self.display_image_from_path(choices[0])
+            return
+        self._display_images_compare_window([p for p in choices if p], selected_index=0)
 
     def open_plot_details(self, attr_name, page, point_index):
         """Open the comparison window directly from a clicked datapoint."""
