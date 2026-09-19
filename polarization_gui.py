@@ -1,4 +1,25 @@
-import os
+# src/polarization_gui.py
+#
+# GUI for polarimetric image analysis
+#
+# Features:
+#   Single image analysis (load image, ROI, calculate DoLP/AoLP, plots, export)
+#   Batch folder analysis (load folder, ROI on batch, plots, export)
+#   Compare mode (load two folders, compare matched images)
+#   Triple compare mode (load three folders, three pairwise comparisons)
+#   Interactive polar plot (click to open underlying image)
+#   Global colormap range sliders (adjust min/max)
+#   Export CSV and PNG
+#
+# Usage:
+#   python polarization_gui.py
+#
+# Note: This GUI is a single-file Tkinter application that embeds
+# matplotlib figures and uses cv2 for preview. It is designed to be
+# kept in one file for simplicity — not intended for production
+# deployment or multi-user use.import os
+
+
 import csv
 import time
 import tkinter as tk
@@ -336,6 +357,8 @@ class PolarizationGUI(tk.Tk):
     def show_single_page(self):
         self.page_active = 'single'
         self.page2_frame.pack_forget()
+        self.page3_frame.pack_forget()
+        self.page4_frame.pack_forget()
         self.page1_frame.pack(fill=tk.BOTH, expand=True)
         self.status_label.config(text="Single-image analysis page active")
 
@@ -343,6 +366,7 @@ class PolarizationGUI(tk.Tk):
         self.page_active = 'batch'
         self.page1_frame.pack_forget()
         self.page3_frame.pack_forget()
+        self.page4_frame.pack_forget()
         self.page2_frame.pack(fill=tk.BOTH, expand=True)
         self.status_label.config(text="Batch folder analysis page active")
 
@@ -351,8 +375,7 @@ class PolarizationGUI(tk.Tk):
         self.page1_frame.pack_forget()
         self.page2_frame.pack_forget()
         self.page4_frame.pack_forget()
-        if self.page_active == 'compare':
-            self.page3_frame.pack(fill=tk.BOTH, expand=True)
+        self.page3_frame.pack(fill=tk.BOTH, expand=True)
         self.status_label.config(text="Batch comparison page active")
 
     def show_triple_compare_page(self):
@@ -2693,6 +2716,7 @@ class PolarizationGUI(tk.Tk):
                 c.grid(row=0, column=i, sticky='nsew', padx=4, pady=4)
                 canvases.append(c)
 
+            # Replace the render_all function with this:
             def render_all(alpha=0.5, overlay=False, primary=0):
                 for i, (c, img) in enumerate(zip(canvases, pil_images)):
                     w = max(1, c.winfo_width() or 320)
@@ -2707,6 +2731,7 @@ class PolarizationGUI(tk.Tk):
                     c.image = tkimg
                     c.delete('all')
                     c.create_image(0, 0, anchor=tk.NW, image=tkimg)
+                    c.image = tkimg  # This line is necessary to prevent garbage collection
 
             controls_frame = tk.Frame(win)
             controls_frame.pack(fill=tk.X, padx=6, pady=6)
@@ -2734,6 +2759,7 @@ class PolarizationGUI(tk.Tk):
             tk.Button(controls_frame, text='Prev', command=prev_primary).pack(side=tk.LEFT, padx=6)
             tk.Button(controls_frame, text='Next', command=next_primary).pack(side=tk.LEFT, padx=6)
 
+            # Replace the open_in_single function with this:
             def open_in_single():
                 idx = primary_idx.get()
                 if idx < len(file_paths):
