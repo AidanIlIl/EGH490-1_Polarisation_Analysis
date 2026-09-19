@@ -1768,6 +1768,36 @@ class PolarizationGUI(tk.Tk):
 
         cbar = None
 
+        def update_range_entries_from_slider():
+            if 'range_slider' not in locals():
+                return
+            current_min, current_max = range_slider.get_range()
+            min_value_var.set(f"{current_min:g}")
+            max_value_var.set(f"{current_max:g}")
+
+        def apply_typed_range():
+            try:
+                typed_min = float(min_value_var.get())
+                typed_max = float(max_value_var.get())
+            except ValueError:
+                update_range_entries_from_slider()
+                return
+
+            lower_limit = float(np.min(finite_values)) if finite_values.size else 0.0
+            upper_limit = float(np.max(finite_values)) if finite_values.size else 1.0
+            typed_min = min(max(float(typed_min), lower_limit), upper_limit)
+            typed_max = min(max(float(typed_max), lower_limit), upper_limit)
+            if typed_max < typed_min:
+                typed_min, typed_max = typed_max, typed_min
+            if abs(typed_max - typed_min) < 1e-12:
+                typed_max = min(typed_min + 1e-9, upper_limit)
+                typed_min = max(typed_min - 1e-9, lower_limit)
+
+            range_slider.set_range(typed_min, typed_max)
+            update_range_entries_from_slider()
+            redraw_heatmap()
+            sync_main_plot_state()
+
         def sync_main_plot_state():
             if attr_name is None:
                 return
@@ -1822,7 +1852,7 @@ class PolarizationGUI(tk.Tk):
             fig.canvas.draw_idle()
 
         class RangeSlider(tk.Frame):
-            def __init__(self, master, data_min, data_max, low_color, middle_color, high_color, width=360, height=28):
+            def __init__(self, master, data_min, data_max, low_color, middle_color, high_color, width=360, height=28, on_change=None):
                 super().__init__(master)
                 self.width = width
                 self.height = height
@@ -1831,6 +1861,7 @@ class PolarizationGUI(tk.Tk):
                 self.low_color = low_color
                 self.middle_color = middle_color
                 self.high_color = high_color
+                self.on_change = on_change
                 self.canvas = tk.Canvas(self, width=self.width, height=self.height)
                 self.canvas.pack(side=tk.TOP, fill=tk.X)
                 self.left_x = 4
@@ -1881,9 +1912,13 @@ class PolarizationGUI(tk.Tk):
                     self.right_x = x
                 self.canvas.coords(self.left_handle, self.left_x - 6, self.height/2 - 8, self.left_x + 6, self.height/2 + 8)
                 self.canvas.coords(self.right_handle, self.right_x - 6, self.height/2 - 8, self.right_x + 6, self.height/2 + 8)
+                if callable(self.on_change):
+                    self.on_change()
 
             def _end_drag(self, event=None):
                 self._drag_data['which'] = None
+                if callable(self.on_change):
+                    self.on_change()
 
             def get_range(self):
                 span = max(self.data_max - self.data_min, 1e-12)
@@ -1892,27 +1927,59 @@ class PolarizationGUI(tk.Tk):
                 return float(min(left_val, right_val)), float(max(left_val, right_val))
 
             def set_range(self, vmin_val, vmax_val):
-                self.left_x = int(4 + (vmin_val - self.data_min) / (self.data_max - self.data_min + 1e-12) * (self.width - 8))
-                self.right_x = int(4 + (vmax_val - self.data_min) / (self.data_max - self.data_min + 1e-12) * (self.width - 8))
+                low = float(np.clip(vmin_val, self.data_min, self.data_max))
+                high = float(np.clip(vmax_val, self.data_min, self.data_max))
+                if high < low:
+                    low, high = high, low
+                span = max(self.data_max - self.data_min, 1e-12)
+                if span <= 0:
+                    self.left_x = 4
+                    self.right_x = self.width - 4
+                else:
+                    self.left_x = int(4 + (low - self.data_min) / span * (self.width - 8))
+                    self.right_x = int(4 + (high - self.data_min) / span * (self.width - 8))
                 self.canvas.coords(self.left_handle, self.left_x - 6, self.height/2 - 8, self.left_x + 6, self.height/2 + 8)
                 self.canvas.coords(self.right_handle, self.right_x - 6, self.height/2 - 8, self.right_x + 6, self.height/2 + 8)
+                if callable(self.on_change):
+                    self.on_change()
 
         slider_frame = tk.Frame(controls_frame)
         slider_frame.grid(row=0, column=0, columnspan=6, sticky='ew', pady=(0, 6))
-        range_slider = RangeSlider(slider_frame, data_min=float(np.min(finite_values)) if finite_values.size else 0.0, data_max=float(np.max(finite_values)) if finite_values.size else 1.0, low_color=low_color_var.get(), middle_color=middle_color_var.get(), high_color=high_color_var.get())
+        range_slider = RangeSlider(
+            slider_frame,
+            data_min=float(np.min(finite_values)) if finite_values.size else 0.0,
+            data_max=float(np.max(finite_values)) if finite_values.size else 1.0,
+            low_color=low_color_var.get(),
+            middle_color=middle_color_var.get(),
+            high_color=high_color_var.get(),
+            on_change=update_range_entries_from_slider,
+        )
         range_slider.pack(fill=tk.X)
 
-        tk.Button(controls_frame, text='Pick Low Color', command=lambda: pick_color(low_color_var, 'low')).grid(row=1, column=0, padx=4)
-        tk.Label(controls_frame, textvariable=low_color_var).grid(row=1, column=1, padx=4)
-        tk.Button(controls_frame, text='Pick Middle Color', command=lambda: pick_color(middle_color_var, 'middle')).grid(row=1, column=2, padx=4)
-        tk.Label(controls_frame, textvariable=middle_color_var).grid(row=1, column=3, padx=4)
-        tk.Button(controls_frame, text='Pick High Color', command=lambda: pick_color(high_color_var, 'high')).grid(row=1, column=4, padx=4)
-        tk.Label(controls_frame, textvariable=high_color_var).grid(row=1, column=5, padx=4)
+        min_value_var = tk.StringVar(value=f"{vmin:g}")
+        max_value_var = tk.StringVar(value=f"{vmax:g}")
+
+        tk.Label(controls_frame, text='Min:').grid(row=1, column=0, sticky='e', padx=(0, 4))
+        min_entry = tk.Entry(controls_frame, textvariable=min_value_var, width=12)
+        min_entry.grid(row=1, column=1, sticky='w', padx=(0, 16))
+        min_entry.bind('<Return>', lambda event: apply_typed_range())
+
+        tk.Label(controls_frame, text='Max:').grid(row=1, column=2, sticky='e', padx=(0, 4))
+        max_entry = tk.Entry(controls_frame, textvariable=max_value_var, width=12)
+        max_entry.grid(row=1, column=3, sticky='w')
+        max_entry.bind('<Return>', lambda event: apply_typed_range())
+
+        tk.Button(controls_frame, text='Pick Low Color', command=lambda: pick_color(low_color_var, 'low')).grid(row=2, column=0, padx=4)
+        tk.Label(controls_frame, textvariable=low_color_var).grid(row=2, column=1, padx=4)
+        tk.Button(controls_frame, text='Pick Middle Color', command=lambda: pick_color(middle_color_var, 'middle')).grid(row=2, column=2, padx=4)
+        tk.Label(controls_frame, textvariable=middle_color_var).grid(row=2, column=3, padx=4)
+        tk.Button(controls_frame, text='Pick High Color', command=lambda: pick_color(high_color_var, 'high')).grid(row=2, column=4, padx=4)
+        tk.Label(controls_frame, textvariable=high_color_var).grid(row=2, column=5, padx=4)
 
         range_slider.set_range(vmin, vmax)
-        tk.Button(controls_frame, text='Apply', command=lambda: [redraw_heatmap(), sync_main_plot_state()]).grid(row=2, column=0, columnspan=6, pady=6)
-        tk.Button(controls_frame, text='Plot Selected Slice', command=plot_selected_slice).grid(row=3, column=0, columnspan=3, pady=(0, 6), sticky='ew')
-        tk.Button(controls_frame, text='Reset To 0°', command=lambda: [setattr(selected_angle, 'value', 0.0), clock_hand.set_xdata([0.0, 0.0]), clock_hand.set_ydata([0.0, max_r]), outer_handle.set_offsets(np.column_stack([[0.0], [max_r]])), fig.canvas.draw_idle()]).grid(row=3, column=3, columnspan=3, pady=(0, 6), sticky='ew')
+        tk.Button(controls_frame, text='Apply', command=apply_typed_range).grid(row=3, column=0, columnspan=6, pady=6)
+        tk.Button(controls_frame, text='Plot Selected Slice', command=plot_selected_slice).grid(row=4, column=0, columnspan=3, pady=(0, 6), sticky='ew')
+        tk.Button(controls_frame, text='Reset To 0°', command=lambda: [setattr(selected_angle, 'value', 0.0), clock_hand.set_xdata([0.0, 0.0]), clock_hand.set_ydata([0.0, max_r]), outer_handle.set_offsets(np.column_stack([[0.0], [max_r]])), fig.canvas.draw_idle()]).grid(row=4, column=3, columnspan=3, pady=(0, 6), sticky='ew')
 
         if attr_name is not None:
             key = f"{page}:{attr_name}"
@@ -1956,468 +2023,6 @@ class PolarizationGUI(tk.Tk):
         meta = dict(meta)
         self.open_interactive_isolation_plot(theta, radii, values, title, meta, page=page, attr_name=attr_name)
         return
-
-        if page == 'triple_compare':
-            plot_canvas = self.triple_plot_canvases.get(attr_name)
-            if plot_canvas is not None:
-                grid_info = plot_canvas.get_tk_widget().grid_info()
-                meta['pos'] = (int(grid_info['row']), int(grid_info['column']))
-
-        # initial vmin/vmax from metadata
-        vmin = float(meta.get('vmin', float(np.nanmin(values)) if np.any(np.isfinite(values)) else 0.0))
-        vmax = float(meta.get('vmax', float(np.nanmax(values)) if np.any(np.isfinite(values)) else 1.0))
-        low_init = meta.get('low_color', '#0000ff')
-        high_init = meta.get('high_color', '#ff0000')
-
-        win = tk.Toplevel(self)
-        win.title(f"Isolated Plot: {attr_name}")
-        win.geometry('800x640')
-
-        # create a frame to hold the plot so we can replace its children cleanly
-        plot_frame = tk.Frame(win)
-        plot_frame.pack(fill=tk.BOTH, expand=True)
-
-        cmap_name = meta.get('cmap', 'viridis')
-        try:
-            original_cmap = self._get_plot_colormap(cmap_name)
-            middle_init = meta.get('middle_color', mcolors.to_hex(original_cmap(0.5)))
-            cmap_obj = original_cmap
-        except Exception:
-            middle_init = meta.get('middle_color', '#ffffff')
-            cmap_obj = self._make_custom_colormap(low_init, middle_init, high_init)
-
-        if page == 'batch':
-            main_point_size = self.batch_point_size.get()
-        elif page == 'compare':
-            main_point_size = self.compare_point_size.get()
-        else:
-            main_point_size = self.triple_point_size.get()
-        isolation_point_size = tk.IntVar(value=main_point_size)
-
-        fig = self._make_polar_scatter_fig(theta, radii, values, cmap=cmap_obj, title=title, vmin=vmin, vmax=vmax, size=isolation_point_size.get())
-        canvas = FigureCanvasTkAgg(fig, master=plot_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
-        # make scatter points reliably click-selectable for both polar and phase-angle plots
-        try:
-            ax = fig.axes[0]
-            all_collections = list(getattr(ax, 'collections', []))
-            if not all_collections:
-                raise RuntimeError('No scatter collections on axis')
-
-            plot_kind = meta.get('plot_kind', 'polar')
-
-            def _on_click(event):
-                try:
-                    if event.inaxes is not ax:
-                        return
-                    best_idx = None
-                    best_dist = None
-                    for artist in all_collections:
-                        offsets = getattr(artist, 'get_offsets', lambda: None)()
-                        if offsets is None or len(offsets) == 0:
-                            continue
-                        if event.xdata is None or event.ydata is None:
-                            continue
-                        if plot_kind == 'phase':
-                            xs = offsets[:, 0]
-                            ys = offsets[:, 1]
-                            dist = np.hypot(xs - event.xdata, ys - event.ydata)
-                        else:
-                            deltas = offsets - np.array([event.xdata, event.ydata])
-                            dist = np.hypot(deltas[:, 0], deltas[:, 1])
-                        candidate = int(np.argmin(dist))
-                        if best_dist is None or dist[candidate] < best_dist:
-                            best_dist = float(dist[candidate])
-                            best_idx = candidate
-                    if best_idx is not None:
-                        self.open_plot_details(attr_name, page, best_idx)
-                except Exception:
-                    pass
-
-            fig.canvas.mpl_connect('button_press_event', _on_click)
-        except Exception:
-            pass
-
-        controls_frame = tk.Frame(win)
-        controls_frame.pack(fill=tk.X, padx=6, pady=6)
-
-        # Color pickers
-        low_color_var = tk.StringVar(value=low_init)
-        middle_color_var = tk.StringVar(value=middle_init)
-        high_color_var = tk.StringVar(value=high_init)
-
-        def pick_low():
-            c = colorchooser.askcolor(color=low_color_var.get(), parent=win)
-            if c and c[1]:
-                low_color_var.set(c[1])
-                try:
-                    range_slider.update_colors(low_color_var.get(), middle_color_var.get(), high_color_var.get())
-                except Exception:
-                    pass
-
-        def pick_middle():
-            c = colorchooser.askcolor(color=middle_color_var.get(), parent=win)
-            if c and c[1]:
-                middle_color_var.set(c[1])
-                try:
-                    range_slider.update_colors(low_color_var.get(), middle_color_var.get(), high_color_var.get())
-                except Exception:
-                    pass
-
-        def pick_high():
-            c = colorchooser.askcolor(color=high_color_var.get(), parent=win)
-            if c and c[1]:
-                high_color_var.set(c[1])
-                try:
-                    range_slider.update_colors(low_color_var.get(), middle_color_var.get(), high_color_var.get())
-                except Exception:
-                    pass
-
-        tk.Button(controls_frame, text='Pick Low Color', command=pick_low).grid(row=0, column=0, padx=4)
-        tk.Label(controls_frame, textvariable=low_color_var).grid(row=0, column=1, padx=4)
-        tk.Button(controls_frame, text='Pick Middle Color', command=pick_middle).grid(row=0, column=2, padx=4)
-        tk.Label(controls_frame, textvariable=middle_color_var).grid(row=0, column=3, padx=4)
-        tk.Button(controls_frame, text='Pick High Color', command=pick_high).grid(row=0, column=4, padx=4)
-        tk.Label(controls_frame, textvariable=high_color_var).grid(row=0, column=5, padx=4)
-
-        # vmin/vmax dual-handle gradient slider (more user-friendly)
-        class RangeSlider(tk.Frame):
-            def __init__(self, master, data_min, data_max, low_color, middle_color, high_color, width=360, height=28, on_change=None, **kwargs):
-                super().__init__(master, **kwargs)
-                self.width = width
-                self.height = height
-                self.data_min = float(data_min)
-                self.data_max = float(data_max)
-                self.low_color = low_color
-                self.middle_color = middle_color
-                self.high_color = high_color
-                self.on_change = on_change
-                self.canvas = tk.Canvas(self, width=self.width, height=self.height)
-                self.canvas.pack(side=tk.TOP, fill=tk.X, expand=False)
-                self.label_frame = tk.Frame(self)
-                self.label_frame.pack(side=tk.TOP, fill=tk.X)
-                self.min_label = tk.Label(self.label_frame, text=f"{self.data_min:.3g}")
-                self.max_label = tk.Label(self.label_frame, text=f"{self.data_max:.3g}")
-                self.min_label.pack(side=tk.LEFT)
-                self.max_label.pack(side=tk.RIGHT)
-
-                # slider state: positions in pixels
-                self.left_x = 4
-                self.right_x = self.width - 4
-
-                self._draw_gradient()
-                self.left_handle = self.canvas.create_oval(self.left_x - 6, self.height/2 - 8, self.left_x + 6, self.height/2 + 8, fill='white', outline='black')
-                self.right_handle = self.canvas.create_oval(self.right_x - 6, self.height/2 - 8, self.right_x + 6, self.height/2 + 8, fill='white', outline='black')
-
-                self._drag_data = {'which': None}
-                self.canvas.tag_bind(self.left_handle, '<ButtonPress-1>', lambda e: self._start_drag('left', e))
-                self.canvas.tag_bind(self.right_handle, '<ButtonPress-1>', lambda e: self._start_drag('right', e))
-                self.canvas.bind('<B1-Motion>', self._drag)
-                self.canvas.bind('<ButtonRelease-1>', lambda e: self._end_drag())
-
-            def _draw_gradient(self):
-                self.canvas.delete('grad')
-                steps = 180
-                low_rgb = np.array(mcolors.to_rgb(self.low_color), dtype=float)
-                middle_rgb = np.array(mcolors.to_rgb(self.middle_color), dtype=float)
-                high_rgb = np.array(mcolors.to_rgb(self.high_color), dtype=float)
-                for i in range(steps):
-                    t = i / (steps - 1)
-                    if t <= 0.5:
-                        local_t = t * 2.0
-                        col_rgb = low_rgb * (1.0 - local_t) + middle_rgb * local_t
-                    else:
-                        local_t = (t - 0.5) * 2.0
-                        col_rgb = middle_rgb * (1.0 - local_t) + high_rgb * local_t
-                    col = mcolors.to_hex(col_rgb)
-                    x1 = int(2 + i * (self.width - 4) / steps)
-                    x2 = int(2 + (i + 1) * (self.width - 4) / steps)
-                    self.canvas.create_rectangle(x1, 4, x2, self.height - 4, fill=col, outline=col, tags='grad')
-                # ensure gradient sits below handles so handles remain visible after redraw
-                try:
-                    self.canvas.tag_lower('grad')
-                except Exception:
-                    pass
-
-            def _start_drag(self, which, event):
-                self._drag_data['which'] = which
-
-            def _drag(self, event):
-                which = self._drag_data.get('which')
-                if not which:
-                    return
-                x = min(max(4, event.x), self.width - 4)
-                if which == 'left':
-                    # prevent crossing
-                    x = min(x, self.right_x - 12)
-                    self.left_x = x
-                    self.canvas.coords(self.left_handle, x - 6, self.height/2 - 8, x + 6, self.height/2 + 8)
-                else:
-                    x = max(x, self.left_x + 12)
-                    self.right_x = x
-                    self.canvas.coords(self.right_handle, x - 6, self.height/2 - 8, x + 6, self.height/2 + 8)
-                self._update_labels()
-
-            def _end_drag(self):
-                self._drag_data['which'] = None
-
-            def _update_labels(self):
-                vmin_val, vmax_val = self.get()
-                self.min_label.config(text=f"{vmin_val:.3g}")
-                self.max_label.config(text=f"{vmax_val:.3g}")
-                if hasattr(self, 'on_change') and callable(self.on_change):
-                    try:
-                        self.on_change(vmin_val, vmax_val)
-                    except Exception:
-                        pass
-
-            def set_range(self, vmin_val, vmax_val):
-                # clamp
-                vmin_val = max(self.data_min, min(self.data_max, float(vmin_val)))
-                vmax_val = max(self.data_min, min(self.data_max, float(vmax_val)))
-                if self.data_max == self.data_min:
-                    self.left_x = self.right_x = (self.width - 1) // 2
-                    self.canvas.coords(self.left_handle, self.left_x - 6, self.height/2 - 8, self.left_x + 6, self.height/2 + 8)
-                    self.canvas.coords(self.right_handle, self.right_x - 6, self.height/2 - 8, self.right_x + 6, self.height/2 + 8)
-                    self._update_labels()
-                    return
-                if vmax_val <= vmin_val:
-                    vmax_val = min(self.data_max, vmin_val + 1e-9)
-                left_rel = (vmin_val - self.data_min) / (self.data_max - self.data_min)
-                right_rel = (vmax_val - self.data_min) / (self.data_max - self.data_min)
-                self.left_x = int(4 + left_rel * (self.width - 8))
-                self.right_x = int(4 + right_rel * (self.width - 8))
-                self.canvas.coords(self.left_handle, self.left_x - 6, self.height/2 - 8, self.left_x + 6, self.height/2 + 8)
-                self.canvas.coords(self.right_handle, self.right_x - 6, self.height/2 - 8, self.right_x + 6, self.height/2 + 8)
-                self._update_labels()
-
-            def get(self):
-                # map pixel positions to data range
-                if self.data_max == self.data_min:
-                    return (self.data_min, self.data_max)
-                left_rel = (self.left_x - 4) / (self.width - 8)
-                right_rel = (self.right_x - 4) / (self.width - 8)
-                vmin_val = self.data_min + left_rel * (self.data_max - self.data_min)
-                vmax_val = self.data_min + right_rel * (self.data_max - self.data_min)
-                return (vmin_val, vmax_val)
-
-            def update_colors(self, low_color, middle_color, high_color):
-                self.low_color = low_color
-                self.middle_color = middle_color
-                self.high_color = high_color
-                self._draw_gradient()
-
-        finite_values = values[np.isfinite(values)]
-        slider_min = float(np.min(finite_values)) if finite_values.size else 0.0
-        slider_max = float(np.max(finite_values)) if finite_values.size else 1.0
-        range_slider = RangeSlider(controls_frame, data_min=slider_min, data_max=slider_max, low_color=low_color_var.get(), middle_color=middle_color_var.get(), high_color=high_color_var.get())
-        # set initial handles to reflect current vmin/vmax
-        try:
-            range_slider.set_range(vmin, vmax)
-        except Exception:
-            pass
-        range_slider.grid(row=1, column=0, columnspan=6, pady=6)
-        # Numeric entries can intentionally extend beyond the data range.
-        span = slider_max - slider_min if slider_max - slider_min != 0 else 1.0
-        step = span / 500.0 if span else 1.0
-        min_var = tk.DoubleVar(value=vmin)
-        max_var = tk.DoubleVar(value=vmax)
-
-        min_box = tk.Entry(controls_frame, textvariable=min_var, width=12)
-        max_box = tk.Entry(controls_frame, textvariable=max_var, width=12)
-        tk.Label(controls_frame, text='Global min:').grid(row=2, column=0, sticky='e')
-        min_box.grid(row=2, column=1, sticky='w', padx=4)
-        tk.Label(controls_frame, text='Global max:').grid(row=2, column=2, sticky='e')
-        max_box.grid(row=2, column=3, sticky='w', padx=4)
-
-        def boxes_to_slider(event=None):
-            try:
-                lv = float(min_var.get())
-                hv = float(max_var.get())
-                if hv <= lv:
-                    return
-                if slider_min <= lv <= slider_max and slider_min <= hv <= slider_max:
-                    range_slider.set_range(lv, hv)
-            except Exception:
-                pass
-
-        def get_typed_range():
-            lv = float(min_var.get())
-            hv = float(max_var.get())
-            if hv <= lv:
-                raise ValueError('Maximum must be greater than minimum.')
-            return lv, hv
-
-        def slider_to_boxes(lv, hv):
-            try:
-                min_var.set(lv)
-                max_var.set(hv)
-            except Exception:
-                pass
-
-        min_box.bind('<KeyRelease>', boxes_to_slider)
-        min_box.bind('<FocusOut>', boxes_to_slider)
-        max_box.bind('<KeyRelease>', boxes_to_slider)
-        max_box.bind('<FocusOut>', boxes_to_slider)
-        range_slider.on_change = slider_to_boxes
-
-        cbar = None
-
-        def render_isolated_plot(cmap, vmin_value, vmax_value):
-            nonlocal cbar
-            scatter.set_cmap(cmap)
-            scatter.set_clim(vmin_value, vmax_value)
-            scatter.set_sizes([isolation_point_size.get()] * len(scatter.get_offsets()))
-            if cbar is not None:
-                try:
-                    cbar.remove()
-                except Exception:
-                    pass
-                cbar = None
-            cbar = fig.colorbar(scatter, ax=ax_polar, pad=0.10)
-            fig.canvas.draw_idle()
-            return fig
-
-        def update_isolation_point_size(value=None):
-            try:
-                current_vmin, current_vmax = get_typed_range()
-                render_isolated_plot(
-                    self._make_custom_colormap(
-                        low_color_var.get(),
-                        middle_color_var.get(),
-                        high_color_var.get()
-                    ),
-                    current_vmin,
-                    current_vmax
-                )
-            except ValueError:
-                pass
-
-        tk.Label(controls_frame, text='Datapoint Size:').grid(row=3, column=0, sticky='e')
-        isolation_size_scale = tk.Scale(
-            controls_frame, from_=1, to=100, orient=tk.HORIZONTAL,
-            variable=isolation_point_size, command=update_isolation_point_size
-        )
-        isolation_size_scale.grid(row=3, column=1, columnspan=3, sticky='ew', padx=4)
-
-        # Re-pack the initial canvas after controls are added so layout accounts for control height
-        try:
-            canvas_widget = canvas.get_tk_widget()
-            canvas_widget.pack_forget()
-            canvas_widget.pack(fill=tk.BOTH, expand=True)
-        except Exception:
-            pass
-
-        def apply_changes():
-            low = low_color_var.get()
-            middle = middle_color_var.get()
-            high = high_color_var.get()
-            try:
-                vmin_new, vmax_new = get_typed_range()
-            except ValueError:
-                return
-            cmap = self._make_custom_colormap(low, middle, high)
-            try:
-                range_slider.update_colors(low, middle, high)
-            except Exception:
-                pass
-
-            # Update the existing Matplotlib figure instead of destroying the whole plot panel.
-            scatter.set_cmap(cmap)
-            scatter.set_clim(vmin_new, vmax_new)
-            scatter.set_sizes([isolation_point_size.get()] * len(scatter.get_offsets()))
-            if cbar is not None:
-                try:
-                    cbar.remove()
-                except Exception:
-                    pass
-                cbar = None
-            cbar = fig.colorbar(scatter, ax=ax_polar, pad=0.10)
-            fig.canvas.draw_idle()
-
-            self.plot_range_overrides[page][attr_name] = (float(vmin_new), float(vmax_new))
-            meta_new = {'low_color': low, 'middle_color': middle, 'high_color': high, 'vmin': float(vmin_new), 'vmax': float(vmax_new), 'cmap': 'custom', 'pos': meta.get('pos', (1,0))}
-            data_store[attr_name] = (theta, radii, values, title, meta_new)
-
-            if page == 'batch':
-                self.update_batch_plots()
-            elif page == 'compare':
-                self.update_compare_plots()
-            elif page == 'triple_compare':
-                self.update_triple_plots()
-
-            try:
-                win.focus_force()
-                controls_frame.focus_set()
-            except Exception:
-                pass
-
-        tk.Button(controls_frame, text='Apply', command=apply_changes).grid(row=4, column=0, columnspan=4, pady=6)
-
-        def persist_and_close():
-            # persist current slider/colors to main UI even if user didn't click Apply
-            try:
-                low = low_color_var.get()
-                middle = middle_color_var.get()
-                high = high_color_var.get()
-                vmin_new, vmax_new = get_typed_range()
-                cmap = self._make_custom_colormap(low, middle, high)
-                new_fig = self._make_polar_scatter_fig(
-                    theta, radii, values, cmap=cmap, title=title,
-                    vmin=vmin_new, vmax=vmax_new, size=main_point_size
-                )
-                self.plot_range_overrides[page][attr_name] = (float(vmin_new), float(vmax_new))
-                meta_new = {'low_color': low, 'middle_color': middle, 'high_color': high, 'vmin': float(vmin_new), 'vmax': float(vmax_new), 'cmap': 'custom', 'pos': meta.get('pos', (1,0))}
-                data_store[attr_name] = (theta, radii, values, title, meta_new)
-                fig_store[attr_name] = new_fig
-                if page == 'batch':
-                    try:
-                        self._clear_batch_plot_canvas(attr_name)
-                    except Exception:
-                        pass
-                    try:
-                        r,c = meta_new.get('pos', (1,0))
-                        self._draw_batch_plot(new_fig, attr_name, row=r, column=c)
-                    except Exception:
-                        pass
-                elif page == 'compare':
-                    try:
-                        existing = self.compare_plot_canvases.get(attr_name)
-                        if existing is not None:
-                            existing.get_tk_widget().destroy()
-                            del self.compare_plot_canvases[attr_name]
-                    except Exception:
-                        pass
-                    try:
-                        r,c = meta_new.get('pos', (1,0))
-                        self._draw_compare_plot(new_fig, attr_name, row=r, column=c)
-                    except Exception:
-                        pass
-                elif page == 'triple_compare':
-                    try:
-                        existing = self.triple_plot_canvases.get(attr_name)
-                        if existing is not None:
-                            existing.get_tk_widget().destroy()
-                            del self.triple_plot_canvases[attr_name]
-                    except Exception:
-                        pass
-                    try:
-                        r,c = meta_new.get('pos', (1,0))
-                        self._draw_triple_plot(new_fig, attr_name, row=r, column=c)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            try:
-                del self._isolated_windows[key]
-            except Exception:
-                pass
-            win.destroy()
-
-        win.protocol('WM_DELETE_WINDOW', persist_and_close)
-        self._isolated_windows[key] = win
 
     def update_compare_plots(self):
         self.clear_compare_plots()
