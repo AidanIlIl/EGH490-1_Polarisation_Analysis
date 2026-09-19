@@ -32,6 +32,7 @@ from matplotlib import colors as mcolors
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import os
 import time
+import polarisation_calcs as pc
 from analysis import PolarizationProcessor
 
 
@@ -276,6 +277,12 @@ class PolarizationGUI(tk.Tk):
 
         self.batch_export_png_btn = tk.Button(self.batch_left_frame, text="Export Graphs as PNG", command=self.export_batch_png)
         self.batch_export_png_btn.pack(fill=tk.X, pady=4)
+
+        self.show_phase_graphs = tk.BooleanVar(value=True)
+        phase_frame = tk.Frame(self.batch_left_frame)
+        phase_frame.pack(fill=tk.X, pady=4)
+        tk.Button(phase_frame, text="Create Phase Graphs", command=lambda: self.set_phase_graph_visibility(True)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+        tk.Button(phase_frame, text="Hide Phase Graphs", command=lambda: self.set_phase_graph_visibility(False)).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         tk.Label(self.batch_left_frame, text="Datapoint Size:").pack(pady=(12, 2), anchor="w")
         batch_size_scale = tk.Scale(self.batch_left_frame, from_=1, to=100, orient=tk.HORIZONTAL, variable=self.batch_point_size, command=lambda v: self.update_batch_plots())
@@ -908,6 +915,16 @@ class PolarizationGUI(tk.Tk):
         fig.colorbar(scatter, ax=ax, fraction=0.046, pad=0.08)
         return fig
 
+    def _make_phase_scatter_fig(self, x_vals, y_vals, values, cmap, title, x_label, y_label, vmin=None, vmax=None, size=20):
+        fig, ax = plt.subplots(figsize=(4, 3))
+        scatter = ax.scatter(x_vals, y_vals, c=values, cmap=cmap, s=size, edgecolors='black', linewidth=0.1, vmin=vmin, vmax=vmax)
+        ax.set_title(title, fontsize=10)
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+        ax.grid(True, alpha=0.3)
+        fig.colorbar(scatter, ax=ax, fraction=0.046, pad=0.04)
+        return fig
+
     def _get_plot_colormap(self, cmap_name):
         return plt.get_cmap(cmap_name) if isinstance(cmap_name, str) else cmap_name
 
@@ -1196,46 +1213,49 @@ class PolarizationGUI(tk.Tk):
             ax3.set_xlim(-1, 1)
         self._draw_plot(fig3, 'hist_canvas', row=1, column=1)
 
+    def set_phase_graph_visibility(self, enabled):
+        if hasattr(self, 'show_phase_graphs'):
+            self.show_phase_graphs.set(enabled)
+        if hasattr(self, 'processor') and hasattr(self.processor, 'batch_results'):
+            self.update_batch_plots()
+
     def update_batch_plots(self):
         for canvas in self.batch_plot_canvases.values():
             if canvas is not None:
                 canvas.get_tk_widget().destroy()
         self.batch_plot_canvases.clear()
+        self.batch_plot_data = {}
 
         if not hasattr(self.processor, 'batch_results') or not self.processor.batch_results:
             return
 
         results = self.processor.batch_results
         pol_type = self.batch_pol_var.get()
-        
+        include_phase = getattr(self, 'show_phase_graphs', None)
+        if include_phase is None:
+            include_phase = True
+        else:
+            include_phase = bool(include_phase.get())
+
         azimuths = np.array([float(r['params']['az']) for r in results], dtype=float)
         zeniths = np.array([float(r['params']['ze']) for r in results], dtype=float)
+        phase_angles = np.array([
+            float(pc.phase_angle(float(r['params'].get('cze', 0.0)), float(r['params'].get('az', 0.0)), float(r['params'].get('ze', 0.0))))
+            for r in results
+        ], dtype=float)
         theta = np.deg2rad(azimuths)
         radii = zeniths
 
         # Mirror azimuths around 180°
-        # Example:
-        # 0   -> 180
-        # 30  -> 210
-        # 90  -> 270
-        # 150 -> 330
         mirrored_azimuths = 360 - azimuths
-
-        # Duplicate zenith values for mirrored hemisphere
         mirrored_zeniths = zeniths.copy()
-
-        # Combine original + mirrored data
         azimuths_full = np.concatenate([azimuths, mirrored_azimuths])
-        zeniths_full  = np.concatenate([zeniths, mirrored_zeniths])
-
-        # Polar plotting variables
+        zeniths_full = np.concatenate([zeniths, mirrored_zeniths])
         theta = np.deg2rad(azimuths_full)
         radii = zeniths_full
 
-
-
         if pol_type == 'linear':
-            dolp_vals = np.array([(float(r['pol'][0])*100) for r in results], dtype=float)
+            dolp_vals = np.array([(float(r['pol'][0]) * 100) for r in results], dtype=float)
             dolp_vals = self.mirror_array(dolp_vals)
 
             aolp_vals = np.array([float(r['pol'][1]) for r in results], dtype=float)
@@ -1251,66 +1271,82 @@ class PolarizationGUI(tk.Tk):
             sat_vals = self.mirror_array(sat_vals)
 
             aolp_vals_norm = aolp_vals / np.pi
-            
-            # Row 0, Col 0: DoLP average
+
             vmin_val = float(np.nanmin(dolp_vals)) if np.any(np.isfinite(dolp_vals)) else 0.0
             vmax_val = float(np.nanmax(dolp_vals)) if np.any(np.isfinite(dolp_vals)) else 1.0
             cmap_name = 'viridis'
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
-            self.batch_plot_data['dolp_avg'] = (theta, radii, dolp_vals, 'DoLP image average', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,0)})
+            self.batch_plot_data['dolp_avg'] = (theta, radii, dolp_vals, 'DoLP image average', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1, 0)})
             fig1 = self._make_polar_scatter_fig(theta, radii, dolp_vals, 'viridis', 'DoLP image average', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig1, 'dolp_avg', row=1, column=0)
 
-            # Row 0, Col 1: DoLP std dev
             vmin_val = float(np.nanmin(dolp_stds)) if np.any(np.isfinite(dolp_stds)) else 0.0
             vmax_val = float(np.nanmax(dolp_stds)) if np.any(np.isfinite(dolp_stds)) else 1.0
             cmap_name = 'Purples'
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
-            self.batch_plot_data['dolp_std'] = (theta, radii, dolp_stds, 'DoLP image standard deviation', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,1)})
+            self.batch_plot_data['dolp_std'] = (theta, radii, dolp_stds, 'DoLP image standard deviation', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1, 1)})
             fig2 = self._make_polar_scatter_fig(theta, radii, dolp_stds, 'Purples', 'DoLP image standard deviation', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig2, 'dolp_std', row=1, column=1)
 
-            # Row 0, Col 2: Saturation %
             vmin_val = float(np.nanmin(sat_vals)) if np.any(np.isfinite(sat_vals)) else 0.0
             vmax_val = float(np.nanmax(sat_vals)) if np.any(np.isfinite(sat_vals)) else 1.0
             cmap_name = 'YlGn'
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
-            self.batch_plot_data['saturation'] = (theta, radii, sat_vals, 'Image saturation % (total 0-255)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,2)})
+            self.batch_plot_data['saturation'] = (theta, radii, sat_vals, 'Image saturation % (total 0-255)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1, 2)})
             fig3 = self._make_polar_scatter_fig(theta, radii, sat_vals, 'YlGn', 'Image saturation % (total 0-255)', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig3, 'saturation', row=1, column=2)
 
-            # Row 1, Col 0: AoLP average
             vmin_val = float(np.nanmin(aolp_vals_norm)) if np.any(np.isfinite(aolp_vals_norm)) else 0.0
             vmax_val = float(np.nanmax(aolp_vals_norm)) if np.any(np.isfinite(aolp_vals_norm)) else 1.0
             cmap_name = 'YlGn'
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
-            self.batch_plot_data['aolp_avg'] = (theta, radii, aolp_vals_norm, 'AoLP image average', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2,0)})
+            self.batch_plot_data['aolp_avg'] = (theta, radii, aolp_vals_norm, 'AoLP image average', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2, 0)})
             fig4 = self._make_polar_scatter_fig(theta, radii, aolp_vals_norm, 'YlGn', 'AoLP image average', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig4, 'aolp_avg', row=2, column=0)
 
-            # Row 1, Col 1: AoLP std dev
             vmin_val = float(np.nanmin(aolp_stds)) if np.any(np.isfinite(aolp_stds)) else 0.0
             vmax_val = float(np.nanmax(aolp_stds)) if np.any(np.isfinite(aolp_stds)) else 1.0
             cmap_name = 'Blues'
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
-            self.batch_plot_data['aolp_std'] = (theta, radii, aolp_stds, 'AoLP image standard deviation', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2,1)})
+            self.batch_plot_data['aolp_std'] = (theta, radii, aolp_stds, 'AoLP image standard deviation', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2, 1)})
             fig5 = self._make_polar_scatter_fig(theta, radii, aolp_stds, 'Blues', 'AoLP image standard deviation', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig5, 'aolp_std', row=2, column=1)
 
-            # Row 1, Col 2: DoLP distribution
             vmin_val = float(np.nanmin(dolp_vals)) if np.any(np.isfinite(dolp_vals)) else 0.0
             vmax_val = float(np.nanmax(dolp_vals)) if np.any(np.isfinite(dolp_vals)) else 1.0
             cmap_name = 'cool'
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
-            self.batch_plot_data['dolp_dist'] = (theta, radii, dolp_vals, 'DoLP Distribution', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2,2)})
+            self.batch_plot_data['dolp_dist'] = (theta, radii, dolp_vals, 'DoLP Distribution', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2, 2)})
             fig6 = self._make_polar_scatter_fig(theta, radii, dolp_vals, 'cool', 'DoLP Distribution', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig6, 'dolp_dist', row=2, column=2)
+
+            if include_phase:
+                phase_dolp = np.array([(float(r['pol'][0]) * 100) for r in results], dtype=float)
+                phase_aolp = np.array([float(r['pol'][1]) for r in results], dtype=float)
+                phase_sat = np.array([float(r['saturation']) for r in results], dtype=float)
+                phase_vmin = float(np.nanmin(phase_dolp)) if np.any(np.isfinite(phase_dolp)) else 0.0
+                phase_vmax = float(np.nanmax(phase_dolp)) if np.any(np.isfinite(phase_dolp)) else 1.0
+                self.batch_plot_data['phase_dolp'] = (phase_angles, phase_dolp, phase_dolp, 'DoLP vs phase angle', {'plot_kind': 'phase', 'x_label': 'Phase angle (deg)', 'y_label': 'DoLP (%)', 'vmin': phase_vmin, 'vmax': phase_vmax, 'cmap': 'viridis', 'pos': (3, 0)})
+                fig_phase_dolp = self._make_phase_scatter_fig(phase_angles, phase_dolp, phase_dolp, 'viridis', 'DoLP vs phase angle', 'Phase angle (deg)', 'DoLP (%)', vmin=phase_vmin, vmax=phase_vmax, size=self.batch_point_size.get())
+                self._draw_batch_plot(fig_phase_dolp, 'phase_dolp', row=3, column=0)
+
+                phase_aolp_vmin = float(np.nanmin(phase_aolp)) if np.any(np.isfinite(phase_aolp)) else 0.0
+                phase_aolp_vmax = float(np.nanmax(phase_aolp)) if np.any(np.isfinite(phase_aolp)) else 1.0
+                self.batch_plot_data['phase_aolp'] = (phase_angles, phase_aolp, phase_aolp, 'AoLP vs phase angle', {'plot_kind': 'phase', 'x_label': 'Phase angle (deg)', 'y_label': 'AoLP (rad)', 'vmin': phase_aolp_vmin, 'vmax': phase_aolp_vmax, 'cmap': 'plasma', 'pos': (3, 1)})
+                fig_phase_aolp = self._make_phase_scatter_fig(phase_angles, phase_aolp, phase_aolp, 'plasma', 'AoLP vs phase angle', 'Phase angle (deg)', 'AoLP (rad)', vmin=phase_aolp_vmin, vmax=phase_aolp_vmax, size=self.batch_point_size.get())
+                self._draw_batch_plot(fig_phase_aolp, 'phase_aolp', row=3, column=1)
+
+                phase_sat_vmin = float(np.nanmin(phase_sat)) if np.any(np.isfinite(phase_sat)) else 0.0
+                phase_sat_vmax = float(np.nanmax(phase_sat)) if np.any(np.isfinite(phase_sat)) else 1.0
+                self.batch_plot_data['phase_sat'] = (phase_angles, phase_sat, phase_sat, 'Saturation vs phase angle', {'plot_kind': 'phase', 'x_label': 'Phase angle (deg)', 'y_label': 'Saturation %', 'vmin': phase_sat_vmin, 'vmax': phase_sat_vmax, 'cmap': 'YlGn', 'pos': (3, 2)})
+                fig_phase_sat = self._make_phase_scatter_fig(phase_angles, phase_sat, phase_sat, 'YlGn', 'Saturation vs phase angle', 'Phase angle (deg)', 'Saturation %', vmin=phase_sat_vmin, vmax=phase_sat_vmax, size=self.batch_point_size.get())
+                self._draw_batch_plot(fig_phase_sat, 'phase_sat', row=3, column=2)
 
         else:
             docp_vals = np.array([float(r['pol'][0]) for r in results], dtype=float)
@@ -1321,39 +1357,34 @@ class PolarizationGUI(tk.Tk):
 
             sat_vals = np.array([float(r['saturation']) for r in results], dtype=float)
             sat_vals = self.mirror_array(sat_vals)
-            
-            # Row 0, Col 0: DoCP average
+
             vmin_val = float(np.nanmin(docp_vals)) if np.any(np.isfinite(docp_vals)) else -1.0
             vmax_val = float(np.nanmax(docp_vals)) if np.any(np.isfinite(docp_vals)) else 1.0
             cmap_name = 'RdBu'
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
-            self.batch_plot_data['docp_avg'] = (theta, radii, docp_vals, 'DoCP image average', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,0)})
+            self.batch_plot_data['docp_avg'] = (theta, radii, docp_vals, 'DoCP image average', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1, 0)})
             fig1 = self._make_polar_scatter_fig(theta, radii, docp_vals, 'RdBu', 'DoCP image average', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig1, 'docp_avg', row=1, column=0)
 
-            # Row 0, Col 1: DoCP std dev
             vmin_val = float(np.nanmin(docp_stds)) if np.any(np.isfinite(docp_stds)) else 0.0
             vmax_val = float(np.nanmax(docp_stds)) if np.any(np.isfinite(docp_stds)) else 1.0
             cmap_name = 'Purples'
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
-            self.batch_plot_data['docp_std'] = (theta, radii, docp_stds, 'DoCP image standard deviation', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,1)})
+            self.batch_plot_data['docp_std'] = (theta, radii, docp_stds, 'DoCP image standard deviation', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1, 1)})
             fig2 = self._make_polar_scatter_fig(theta, radii, docp_stds, 'Purples', 'DoCP image standard deviation', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig2, 'docp_std', row=1, column=1)
 
-            # Row 0, Col 2: Saturation %
             vmin_val = float(np.nanmin(sat_vals)) if np.any(np.isfinite(sat_vals)) else 0.0
             vmax_val = float(np.nanmax(sat_vals)) if np.any(np.isfinite(sat_vals)) else 1.0
             cmap_name = 'YlGn'
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
-            self.batch_plot_data['saturation'] = (theta, radii, sat_vals, 'Image saturation % (total 0-255)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1,2)})
+            self.batch_plot_data['saturation'] = (theta, radii, sat_vals, 'Image saturation % (total 0-255)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (1, 2)})
             fig3 = self._make_polar_scatter_fig(theta, radii, sat_vals, 'YlGn', 'Image saturation % (total 0-255)', vmin=vmin_val, vmax=vmax_val, size=self.batch_point_size.get())
             self._draw_batch_plot(fig3, 'saturation', row=1, column=2)
 
-            # Row 1, Col 0: Circular Polarisation Ratio (RH/LH)
-            # CPR = (1 + DoCP) / (1 - DoCP)
             with np.errstate(divide='ignore', invalid='ignore'):
                 cpr_vals = (1.0 + np.array([float(r['pol'][0]) for r in results], dtype=float)) / (1.0 - np.array([float(r['pol'][0]) for r in results], dtype=float))
             cpr_vals = self.mirror_array(cpr_vals)
@@ -1371,19 +1402,33 @@ class PolarizationGUI(tk.Tk):
             cmap_name = 'plasma'
             lowc = mcolors.to_hex(plt.get_cmap(cmap_name)(0.0))
             highc = mcolors.to_hex(plt.get_cmap(cmap_name)(1.0))
-            self.batch_plot_data['cpr'] = (theta, radii, cpr_plot_vals, 'Circular Polarisation Ratio (RH/LH)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2,0)})
+            self.batch_plot_data['cpr'] = (theta, radii, cpr_plot_vals, 'Circular Polarisation Ratio (RH/LH)', {'low_color': lowc, 'high_color': highc, 'vmin': vmin_val, 'vmax': vmax_val, 'cmap': cmap_name, 'pos': (2, 0)})
             self._draw_batch_plot(fig4, 'cpr', row=2, column=0)
 
-        # attach source file lists to each plot's metadata for reliable datapoint->file mapping
+            docp_phase = np.array([float(r['pol'][0]) for r in results], dtype=float)
+            docp_phase_sat = np.array([float(r['saturation']) for r in results], dtype=float)
+            if include_phase:
+                phase_docp_vmin = float(np.nanmin(docp_phase)) if np.any(np.isfinite(docp_phase)) else -1.0
+                phase_docp_vmax = float(np.nanmax(docp_phase)) if np.any(np.isfinite(docp_phase)) else 1.0
+                self.batch_plot_data['phase_docp'] = (phase_angles, docp_phase, docp_phase, 'DoCP vs phase angle', {'plot_kind': 'phase', 'x_label': 'Phase angle (deg)', 'y_label': 'DoCP', 'vmin': phase_docp_vmin, 'vmax': phase_docp_vmax, 'cmap': 'RdBu', 'pos': (3, 0)})
+                fig_phase_docp = self._make_phase_scatter_fig(phase_angles, docp_phase, docp_phase, 'RdBu', 'DoCP vs phase angle', 'Phase angle (deg)', 'DoCP', vmin=phase_docp_vmin, vmax=phase_docp_vmax, size=self.batch_point_size.get())
+                self._draw_batch_plot(fig_phase_docp, 'phase_docp', row=3, column=0)
+
+                phase_sat_vmin = float(np.nanmin(docp_phase_sat)) if np.any(np.isfinite(docp_phase_sat)) else 0.0
+                phase_sat_vmax = float(np.nanmax(docp_phase_sat)) if np.any(np.isfinite(docp_phase_sat)) else 1.0
+                self.batch_plot_data['phase_sat'] = (phase_angles, docp_phase_sat, docp_phase_sat, 'Saturation vs phase angle', {'plot_kind': 'phase', 'x_label': 'Phase angle (deg)', 'y_label': 'Saturation %', 'vmin': phase_sat_vmin, 'vmax': phase_sat_vmax, 'cmap': 'YlGn', 'pos': (3, 1)})
+                fig_phase_sat = self._make_phase_scatter_fig(phase_angles, docp_phase_sat, docp_phase_sat, 'YlGn', 'Saturation vs phase angle', 'Phase angle (deg)', 'Saturation %', vmin=phase_sat_vmin, vmax=phase_sat_vmax, size=self.batch_point_size.get())
+                self._draw_batch_plot(fig_phase_sat, 'phase_sat', row=3, column=1)
+
         try:
             files = getattr(self.processor, 'batch_files', None)
             if files:
                 for k, v in list(self.batch_plot_data.items()):
                     try:
-                        theta, radii, values, title, meta = v
+                        x_data, y_data, values, title, meta = v
                         meta2 = dict(meta)
                         meta2['files'] = files
-                        self.batch_plot_data[k] = (theta, radii, values, title, meta2)
+                        self.batch_plot_data[k] = (x_data, y_data, values, title, meta2)
                     except Exception:
                         continue
         except Exception:
@@ -1452,6 +1497,392 @@ class PolarizationGUI(tk.Tk):
             return
         self.open_plot_isolation(attr_name, page)
 
+    def open_interactive_isolation_plot(self, theta, radii, values, title, meta, page='batch', attr_name=None):
+        """Open the isolation window with a polar heat map and a draggable angle selector.
+
+        The right-hand plot is a DoLP-vs-phase graph, and compare/triple plots show one
+        line per dataset in the selected angular slice.
+        """
+        iso_win = tk.Toplevel(self)
+        iso_win.title(f"Isolated Plot: {title}")
+        iso_win.geometry("1100x620")
+
+        fig = plt.figure(figsize=(10, 5))
+        ax_polar = fig.add_subplot(121, projection='polar')
+        ax_phase = fig.add_subplot(122)
+
+        theta_arr = np.asarray(theta, dtype=float)
+        radii_arr = np.asarray(radii, dtype=float)
+        values_arr = np.asarray(values, dtype=float)
+        finite_values = values_arr[np.isfinite(values_arr)]
+        vmin = float(meta.get('vmin', np.min(finite_values) if finite_values.size else 0.0))
+        vmax = float(meta.get('vmax', np.max(finite_values) if finite_values.size else 1.0))
+        low_init = meta.get('low_color', '#0000ff')
+        middle_init = meta.get('middle_color', '#ffffff')
+        high_init = meta.get('high_color', '#ff0000')
+        cmap_name = meta.get('cmap', 'viridis')
+        cmap_obj = self._get_plot_colormap(cmap_name)
+
+        max_r = float(np.nanmax(radii_arr)) if radii_arr.size else 1.0
+        max_r = max(max_r, 1.0)
+        selected_angle = {'value': 0.0}
+        selected_phase = {'value': 0.0}
+
+        scatter = ax_polar.scatter(theta_arr, radii_arr, c=values_arr, cmap=cmap_obj, vmin=vmin, vmax=vmax, s=20, zorder=2)
+        ax_polar.set_title(title)
+        ax_polar.set_ylim(0, max_r * 1.1)
+        fig.colorbar(scatter, ax=ax_polar, pad=0.10)
+        clock_hand, = ax_polar.plot([0.0, 0.0], [0.0, max_r], color='black', linewidth=2.5, linestyle='--', zorder=3)
+        outer_handle = ax_polar.scatter([0.0], [max_r], s=60, color='red', edgecolors='black', zorder=4)
+        drag_limit = max_r * 0.12
+
+        ax_phase.set_title('DoLP vs phase angle')
+        ax_phase.set_xlabel('Phase angle (deg)')
+        ax_phase.set_ylabel('DoLP (%)')
+        ax_phase.grid(True, alpha=0.3)
+
+        plot_frame = tk.Frame(iso_win)
+        plot_frame.pack(fill=tk.BOTH, expand=True)
+        canvas = FigureCanvasTkAgg(fig, master=plot_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        def derive_metric_value(result):
+            if 'dolp' in (attr_name or '').lower():
+                return float(result['pol'][0]) * 100.0
+            if 'aolp' in (attr_name or '').lower():
+                return float(result['pol'][1])
+            if 'saturation' in (attr_name or '').lower():
+                return float(result['saturation'])
+            if 'docp' in (attr_name or '').lower():
+                return float(result['pol'][0])
+            return float(result['pol'][0]) * 100.0
+
+        def build_phase_series():
+            series = []
+            dataset_sets = []
+            if page == 'batch':
+                dataset_sets = [('Slice', getattr(self.processor, 'batch_results', []))]
+            elif page == 'compare':
+                dataset_sets = [('Dataset 1', getattr(self.batch_processor1, 'batch_results', [])), ('Dataset 2', getattr(self.batch_processor2, 'batch_results', []))]
+            elif page == 'triple_compare':
+                dataset_sets = [('Dataset 1', getattr(self.triple_processor1, 'batch_results', [])), ('Dataset 2', getattr(self.triple_processor2, 'batch_results', [])), ('Dataset 3', getattr(self.triple_processor3, 'batch_results', []))]
+
+            for label, results in dataset_sets:
+                radiuses = []
+                values = []
+                angles = []
+                for result in results:
+                    params = result.get('params', {})
+                    az_deg = float(params.get('az', 0.0))
+                    ze_deg = float(params.get('ze', 0.0))
+                    radiuses.append(ze_deg)
+                    values.append(derive_metric_value(result))
+                    angles.append(az_deg)
+                if radiuses:
+                    angles_arr = np.asarray(angles, dtype=float)
+                    radiuses_arr = np.asarray(radiuses, dtype=float)
+                    values_arr = np.asarray(values, dtype=float)
+                    order = np.argsort(angles_arr, kind='mergesort')
+                    series.append((label, radiuses_arr[order], values_arr[order], angles_arr[order]))
+            return series
+
+        def plot_selected_slice():
+            selected_theta = float(np.deg2rad(np.mod(np.degrees(selected_angle['value']), 360.0)))
+            ax_phase.clear()
+            ax_phase.set_title('DoLP vs phase angle')
+            ax_phase.set_xlabel('Phase angle (deg)')
+            ax_phase.set_ylabel('DoLP (%)')
+            ax_phase.grid(True, alpha=0.3)
+            lines = build_phase_series()
+            colors = plt.cm.tab10(np.linspace(0, 1, max(1, len(lines))))
+            for idx, s in enumerate(lines):
+                label, phase_x, phase_y, phase_theta = s
+                phase_theta_rad = np.asarray(np.deg2rad(phase_theta), dtype=float)
+                diff = np.abs(np.angle(np.exp(1j * (phase_theta_rad - selected_theta))))
+                mask = diff < np.radians(5.0)
+                if np.any(mask):
+                    plot_x = np.asarray(phase_x, dtype=float)[mask]
+                    plot_y = np.asarray(phase_y, dtype=float)[mask]
+                    # FIX: sort by actual x values
+                    plot_order = np.argsort(plot_x, kind='mergesort')
+                    ax_phase.plot(plot_x[plot_order], plot_y[plot_order], color=colors[idx], lw=2, label=label)
+                    if len(lines) > 1:
+                        ax_phase.legend(loc='best')
+                    if lines:
+                        all_x = np.concatenate([np.asarray(xs, dtype=float) for _, xs, _, _ in lines])
+                        if np.size(all_x) > 0:
+                            ax_phase.set_xlim(0.0, max(float(np.nanmax(all_x)), 1.0))
+            fig.canvas.draw_idle()
+
+        state = {'is_dragging': False}
+
+        def handle_move(event):
+            if not state['is_dragging'] or event.inaxes != ax_polar or event.xdata is None or event.ydata is None:
+                return
+            if abs(float(event.ydata) - max_r) > drag_limit:
+                return
+            selected_angle['value'] = float(np.mod(event.xdata, 2.0 * np.pi))
+            angle_deg = np.mod(np.degrees(selected_angle['value']), 180.0)
+            selected_phase['value'] = float(np.minimum(angle_deg, 180.0 - angle_deg))
+            clock_hand.set_xdata([selected_angle['value'], selected_angle['value']])
+            clock_hand.set_ydata([0.0, max_r])
+            outer_handle.set_offsets(np.column_stack([[selected_angle['value']], [max_r]]))
+            fig.canvas.draw_idle()
+
+        def resolve_right_click_file(event):
+            if event.inaxes != ax_polar or event.xdata is None or event.ydata is None:
+                return None
+            if page == 'batch':
+                files = meta.get('files') or getattr(self.processor, 'batch_files', [])
+            elif page == 'compare':
+                files1 = getattr(self.batch_processor1, 'batch_files', [])
+                files2 = getattr(self.batch_processor2, 'batch_files', [])
+                files = (files1, files2)
+            else:
+                files = [getattr(self.triple_processor1, 'batch_files', []), getattr(self.triple_processor2, 'batch_files', []), getattr(self.triple_processor3, 'batch_files', [])]
+
+            if not isinstance(files, (list, tuple)) or len(files) == 0:
+                return None
+            offsets = scatter.get_offsets()
+            if offsets is None or len(offsets) == 0:
+                return None
+            dists = np.hypot(offsets[:, 0] - event.xdata, offsets[:, 1] - event.ydata)
+            point_index = int(np.argmin(dists))
+            if page == 'batch':
+                index = self._resolve_plot_point_index(point_index, len(offsets), len(files))
+                if index is None:
+                    return None
+                return files[index]
+            if page == 'compare':
+                files1, files2 = files
+                file_count = min(len(files1), len(files2)) if files1 and files2 else 0
+                if file_count <= 0:
+                    return None
+                index = self._resolve_plot_point_index(point_index, len(offsets), file_count)
+                if index is None:
+                    return None
+                return [files1[index], files2[index]][0]
+            files1, files2, files3 = files
+            file_count = min(len(files1), len(files2), len(files3)) if files1 and files2 and files3 else 0
+            if file_count <= 0:
+                return None
+            index = self._resolve_plot_point_index(point_index, len(offsets), file_count)
+            if index is None:
+                return None
+            return [files1[index], files2[index], files3[index]][0]
+
+        def on_press(event):
+            if event.inaxes != ax_polar or event.xdata is None or event.ydata is None:
+                return
+            if event.button == 3:
+                path = resolve_right_click_file(event)
+                if path:
+                    self.display_image_from_path(path)
+                return
+            if abs(float(event.ydata) - max_r) <= drag_limit:
+                state['is_dragging'] = True
+                handle_move(event)
+
+        def on_release(event):
+            state['is_dragging'] = False
+
+        canvas.mpl_connect('button_press_event', on_press)
+        canvas.mpl_connect('button_release_event', on_release)
+        canvas.mpl_connect('motion_notify_event', handle_move)
+
+        controls_frame = tk.Frame(iso_win)
+        controls_frame.pack(fill=tk.X, padx=6, pady=6)
+
+        low_color_var = tk.StringVar(value=low_init)
+        middle_color_var = tk.StringVar(value=middle_init)
+        high_color_var = tk.StringVar(value=high_init)
+
+        def pick_color(target_var, label):
+            result = colorchooser.askcolor(color=target_var.get(), parent=iso_win)
+            if not result or not result[1]:
+                return
+            target_var.set(result[1])
+            if label == 'low':
+                range_slider.low_color = result[1]
+            elif label == 'middle':
+                range_slider.middle_color = result[1]
+            elif label == 'high':
+                range_slider.high_color = result[1]
+            if hasattr(range_slider, '_draw_gradient'):
+                range_slider._draw_gradient()
+
+        cbar = None
+
+        def sync_main_plot_state():
+            if attr_name is None:
+                return
+            current_min, current_max = range_slider.get_range()
+            current_cmap = self._make_custom_colormap(low_color_var.get(), middle_color_var.get(), high_color_var.get())
+            new_meta = dict(meta)
+            new_meta.update({
+                'low_color': low_color_var.get(),
+                'middle_color': middle_color_var.get(),
+                'high_color': high_color_var.get(),
+                'vmin': float(current_min),
+                'vmax': float(current_max),
+                'cmap': 'custom',
+            })
+            self.plot_range_overrides[page][attr_name] = (float(current_min), float(current_max))
+            if page == 'batch':
+                self.batch_plot_data[attr_name] = (theta_arr, radii_arr, values_arr, title, new_meta)
+                self.update_batch_plots()
+            elif page == 'compare':
+                self.compare_plot_data[attr_name] = (theta_arr, radii_arr, values_arr, title, new_meta)
+                self.update_compare_plots()
+            elif page == 'triple_compare':
+                self.triple_plot_data[attr_name] = (theta_arr, radii_arr, values_arr, title, new_meta)
+                self.update_triple_plots()
+
+        def redraw_heatmap():
+            nonlocal clock_hand, cbar, outer_handle
+            current_min, current_max = range_slider.get_range()
+            vmin_new = float(current_min)
+            vmax_new = float(current_max)
+            current_cmap = self._make_custom_colormap(low_color_var.get(), middle_color_var.get(), high_color_var.get())
+            for collection in list(ax_polar.collections):
+                if collection is not outer_handle:
+                    try:
+                        collection.remove()
+                    except Exception:
+                        pass
+            sc = ax_polar.scatter(theta_arr, radii_arr, c=values_arr, cmap=current_cmap, vmin=vmin_new, vmax=vmax_new, s=20, zorder=2)
+            ax_polar.set_title(title)
+            ax_polar.set_ylim(0, max_r * 1.1)
+            if cbar is not None:
+                try:
+                    if cbar.ax in fig.axes:
+                        cbar.remove()
+                except Exception:
+                    pass
+                cbar = None
+            cbar = fig.colorbar(sc, ax=ax_polar, pad=0.10)
+            try:
+                outer_handle.remove()
+            except Exception:
+                pass
+            outer_handle = ax_polar.scatter([selected_angle['value']], [max_r], s=60, color='red', edgecolors='black', zorder=4)
+            clock_hand.set_xdata([selected_angle['value'], selected_angle['value']])
+            clock_hand.set_ydata([0.0, max_r])
+            fig.canvas.draw_idle()
+
+        class RangeSlider(tk.Frame):
+            def __init__(self, master, data_min, data_max, low_color, middle_color, high_color, width=360, height=28):
+                super().__init__(master)
+                self.width = width
+                self.height = height
+                self.data_min = float(data_min)
+                self.data_max = float(data_max)
+                self.low_color = low_color
+                self.middle_color = middle_color
+                self.high_color = high_color
+                self.canvas = tk.Canvas(self, width=self.width, height=self.height)
+                self.canvas.pack(side=tk.TOP, fill=tk.X)
+                self.left_x = 4
+                self.right_x = self.width - 4
+                self.left_handle = self.canvas.create_oval(self.left_x - 6, self.height/2 - 8, self.left_x + 6, self.height/2 + 8, fill='white', outline='black')
+                self.right_handle = self.canvas.create_oval(self.right_x - 6, self.height/2 - 8, self.right_x + 6, self.height/2 + 8, fill='white', outline='black')
+                self._drag_data = {'which': None}
+                self.canvas.tag_bind(self.left_handle, '<ButtonPress-1>', lambda e: self._start_drag('left'))
+                self.canvas.tag_bind(self.right_handle, '<ButtonPress-1>', lambda e: self._start_drag('right'))
+                self.canvas.bind('<B1-Motion>', self._drag)
+                self.canvas.bind('<ButtonRelease-1>', self._end_drag)
+                self._draw_gradient()
+
+            def _draw_gradient(self):
+                self.canvas.delete('grad')
+                low_rgb = np.array(mcolors.to_rgb(self.low_color), dtype=float)
+                middle_rgb = np.array(mcolors.to_rgb(self.middle_color), dtype=float)
+                high_rgb = np.array(mcolors.to_rgb(self.high_color), dtype=float)
+                for i in range(180):
+                    t = i / 179.0
+                    if t <= 0.5:
+                        local_t = t * 2.0
+                        color = low_rgb * (1.0 - local_t) + middle_rgb * local_t
+                    else:
+                        local_t = (t - 0.5) * 2.0
+                        color = middle_rgb * (1.0 - local_t) + high_rgb * local_t
+                    x1 = int(2 + i * (self.width - 4) / 180.0)
+                    x2 = int(2 + (i + 1) * (self.width - 4) / 180.0)
+                    self.canvas.create_rectangle(x1, 4, x2, self.height - 4, fill=mcolors.to_hex(color), outline=mcolors.to_hex(color), tags='grad')
+                try:
+                    self.canvas.tag_lower('grad')
+                except Exception:
+                    pass
+
+            def _start_drag(self, which):
+                self._drag_data['which'] = which
+
+            def _drag(self, event):
+                which = self._drag_data.get('which')
+                if which is None:
+                    return
+                x = min(max(4, event.x), self.width - 4)
+                if which == 'left':
+                    x = min(x, self.right_x - 12)
+                    self.left_x = x
+                else:
+                    x = max(x, self.left_x + 12)
+                    self.right_x = x
+                self.canvas.coords(self.left_handle, self.left_x - 6, self.height/2 - 8, self.left_x + 6, self.height/2 + 8)
+                self.canvas.coords(self.right_handle, self.right_x - 6, self.height/2 - 8, self.right_x + 6, self.height/2 + 8)
+
+            def _end_drag(self, event=None):
+                self._drag_data['which'] = None
+
+            def get_range(self):
+                span = max(self.data_max - self.data_min, 1e-12)
+                left_val = self.data_min + ((self.left_x - 4) / max(self.width - 8, 1)) * span
+                right_val = self.data_min + ((self.right_x - 4) / max(self.width - 8, 1)) * span
+                return float(min(left_val, right_val)), float(max(left_val, right_val))
+
+            def set_range(self, vmin_val, vmax_val):
+                self.left_x = int(4 + (vmin_val - self.data_min) / (self.data_max - self.data_min + 1e-12) * (self.width - 8))
+                self.right_x = int(4 + (vmax_val - self.data_min) / (self.data_max - self.data_min + 1e-12) * (self.width - 8))
+                self.canvas.coords(self.left_handle, self.left_x - 6, self.height/2 - 8, self.left_x + 6, self.height/2 + 8)
+                self.canvas.coords(self.right_handle, self.right_x - 6, self.height/2 - 8, self.right_x + 6, self.height/2 + 8)
+
+        slider_frame = tk.Frame(controls_frame)
+        slider_frame.grid(row=0, column=0, columnspan=6, sticky='ew', pady=(0, 6))
+        range_slider = RangeSlider(slider_frame, data_min=float(np.min(finite_values)) if finite_values.size else 0.0, data_max=float(np.max(finite_values)) if finite_values.size else 1.0, low_color=low_color_var.get(), middle_color=middle_color_var.get(), high_color=high_color_var.get())
+        range_slider.pack(fill=tk.X)
+
+        tk.Button(controls_frame, text='Pick Low Color', command=lambda: pick_color(low_color_var, 'low')).grid(row=1, column=0, padx=4)
+        tk.Label(controls_frame, textvariable=low_color_var).grid(row=1, column=1, padx=4)
+        tk.Button(controls_frame, text='Pick Middle Color', command=lambda: pick_color(middle_color_var, 'middle')).grid(row=1, column=2, padx=4)
+        tk.Label(controls_frame, textvariable=middle_color_var).grid(row=1, column=3, padx=4)
+        tk.Button(controls_frame, text='Pick High Color', command=lambda: pick_color(high_color_var, 'high')).grid(row=1, column=4, padx=4)
+        tk.Label(controls_frame, textvariable=high_color_var).grid(row=1, column=5, padx=4)
+
+        range_slider.set_range(vmin, vmax)
+        tk.Button(controls_frame, text='Apply', command=lambda: [redraw_heatmap(), sync_main_plot_state()]).grid(row=2, column=0, columnspan=6, pady=6)
+        tk.Button(controls_frame, text='Plot Selected Slice', command=plot_selected_slice).grid(row=3, column=0, columnspan=3, pady=(0, 6), sticky='ew')
+        tk.Button(controls_frame, text='Reset To 0°', command=lambda: [setattr(selected_angle, 'value', 0.0), clock_hand.set_xdata([0.0, 0.0]), clock_hand.set_ydata([0.0, max_r]), outer_handle.set_offsets(np.column_stack([[0.0], [max_r]])), fig.canvas.draw_idle()]).grid(row=3, column=3, columnspan=3, pady=(0, 6), sticky='ew')
+
+        if attr_name is not None:
+            key = f"{page}:{attr_name}"
+            self._isolated_windows[key] = iso_win
+
+            def close_window():
+                try:
+                    del self._isolated_windows[key]
+                except Exception:
+                    pass
+                try:
+                    plt.close(fig)
+                except Exception:
+                    pass
+                iso_win.destroy()
+
+            iso_win.protocol('WM_DELETE_WINDOW', close_window)
+        else:
+            iso_win.protocol('WM_DELETE_WINDOW', lambda: [plt.close(fig), iso_win.destroy()])
+
     def open_plot_isolation(self, attr_name, page):
         # Avoid opening multiple windows for same plot
         key = f"{page}:{attr_name}"
@@ -1473,6 +1904,9 @@ class PolarizationGUI(tk.Tk):
             return
         theta, radii, values, title, meta = data_store[attr_name]
         meta = dict(meta)
+        self.open_interactive_isolation_plot(theta, radii, values, title, meta, page=page, attr_name=attr_name)
+        return
+
         if page == 'triple_compare':
             plot_canvas = self.triple_plot_canvases.get(attr_name)
             if plot_canvas is not None:
@@ -1515,18 +1949,19 @@ class PolarizationGUI(tk.Tk):
         canvas.draw()
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
-        # make scatter points reliably click-selectable even when the scatter artist is not the first collection
+        # make scatter points reliably click-selectable for both polar and phase-angle plots
         try:
             ax = fig.axes[0]
             all_collections = list(getattr(ax, 'collections', []))
             if not all_collections:
                 raise RuntimeError('No scatter collections on axis')
 
+            plot_kind = meta.get('plot_kind', 'polar')
+
             def _on_click(event):
                 try:
                     if event.inaxes is not ax:
                         return
-                    # find nearest plotted point to the click in polar coordinates
                     best_idx = None
                     best_dist = None
                     for artist in all_collections:
@@ -1535,14 +1970,19 @@ class PolarizationGUI(tk.Tk):
                             continue
                         if event.xdata is None or event.ydata is None:
                             continue
-                        deltas = offsets - np.array([event.xdata, event.ydata])
-                        dist = np.hypot(deltas[:, 0], deltas[:, 1])
+                        if plot_kind == 'phase':
+                            xs = offsets[:, 0]
+                            ys = offsets[:, 1]
+                            dist = np.hypot(xs - event.xdata, ys - event.ydata)
+                        else:
+                            deltas = offsets - np.array([event.xdata, event.ydata])
+                            dist = np.hypot(deltas[:, 0], deltas[:, 1])
                         candidate = int(np.argmin(dist))
                         if best_dist is None or dist[candidate] < best_dist:
                             best_dist = float(dist[candidate])
                             best_idx = candidate
                     if best_idx is not None:
-                        self._open_datapoint_images(attr_name, page, best_idx)
+                        self.open_plot_details(attr_name, page, best_idx)
                 except Exception:
                     pass
 
@@ -2628,8 +3068,20 @@ class PolarizationGUI(tk.Tk):
         else:
             self.status_label.config(text="Failed to export batch CSV.")
 
+    def _resolve_plot_point_index(self, point_index, data_len, file_count):
+        if file_count <= 0:
+            return None
+        if data_len == file_count:
+            idx = point_index
+        elif data_len >= 2 * file_count:
+            idx = point_index if point_index < file_count else point_index - file_count
+        else:
+            idx = min(max(point_index, 0), file_count - 1)
+        if idx < 0 or idx >= file_count:
+            return None
+        return idx
+
     def _open_datapoint_images(self, attr_name, page, point_index):
-        """Open the image or image pair/triple that corresponds to a clicked isolated plot datapoint."""
         try:
             if page == 'batch':
                 data = self.batch_plot_data.get(attr_name)
@@ -2639,11 +3091,10 @@ class PolarizationGUI(tk.Tk):
                 files = meta.get('files') or getattr(self.processor, 'batch_files', None)
                 if not files:
                     return
-                n = len(theta) // 2 if len(theta) > 1 else len(theta)
-                idx = point_index if point_index < n else point_index - n
-                if idx < 0 or idx >= len(files):
+                idx = self._resolve_plot_point_index(point_index, len(theta), len(files))
+                if idx is None:
                     return
-                self.display_image_from_path(files[idx])
+                self._display_images_compare_window([files[idx]], selected_index=0)
                 return
 
             if page == 'compare':
@@ -2655,11 +3106,11 @@ class PolarizationGUI(tk.Tk):
                 if not isinstance(files_pair, tuple) or len(files_pair) != 2:
                     return
                 files1, files2 = files_pair
-                n = len(theta) // 2 if len(theta) > 1 else len(theta)
-                idx = point_index if point_index < n else point_index - n
-                if idx < 0 or idx >= len(files1) or idx >= len(files2):
+                idx = self._resolve_plot_point_index(point_index, len(theta), min(len(files1), len(files2)))
+                if idx is None:
                     return
-                self._display_images_compare_window([files1[idx], files2[idx]])
+                selected_paths = [files1[idx], files2[idx]]
+                self._display_images_compare_window([p for p in selected_paths if p], selected_index=0)
                 return
 
             if page == 'triple_compare':
@@ -2673,13 +3124,26 @@ class PolarizationGUI(tk.Tk):
                 if not isinstance(files_list, (list, tuple)) or len(files_list) != 3:
                     return
                 files1, files2, files3 = files_list
-                n = len(theta) // 2 if len(theta) > 1 else len(theta)
-                idx = point_index if point_index < n else point_index - n
-                if idx < 0 or idx >= len(files1) or idx >= len(files2) or idx >= len(files3):
+                idx = self._resolve_plot_point_index(point_index, len(theta), len(files1))
+                if idx is None:
                     return
-                self._display_images_compare_window([files1[idx], files2[idx], files3[idx]])
+                selected_paths = [files1[idx], files2[idx], files3[idx]]
+                self._display_images_compare_window([p for p in selected_paths if p], selected_index=0)
         except Exception:
             return
+
+    def open_plot_details(self, attr_name, page, point_index):
+        """Open the comparison window directly from a clicked datapoint."""
+        self._open_datapoint_images(attr_name, page, point_index)
+
+    def _add_details_to_frame(self, details_frame, title, *files):
+        try:
+            details_frame.pack_forget()
+            tk.Label(details_frame, text=title, wraplength=320, justify='left').pack(fill=tk.X, padx=4, pady=4)
+            for i, file in enumerate(files, 1):
+                tk.Label(details_frame, text=f"File {i}: {os.path.basename(file) if file else ''}", wraplength=320, justify='left').pack(fill=tk.X, padx=4, pady=2)
+        except Exception:
+            pass
 
     def display_image_from_path(self, file_path):
         """Load an image into the single-image analysis page and switch to it."""
@@ -2694,9 +3158,10 @@ class PolarizationGUI(tk.Tk):
         except Exception:
             pass
 
-    def _display_images_compare_window(self, file_paths):
+    def _display_images_compare_window(self, file_paths, selected_index=0):
         """Open a Toplevel window with 2 or 3 images, overlay and cycle controls."""
         try:
+            selected_index = max(0, min(int(selected_index), max(len(file_paths) - 1, 0)))
             win = tk.Toplevel(self)
             win.title("Image comparison")
             win.geometry('1100x700')
@@ -2716,11 +3181,11 @@ class PolarizationGUI(tk.Tk):
                 c.grid(row=0, column=i, sticky='nsew', padx=4, pady=4)
                 canvases.append(c)
 
-            # Replace the render_all function with this:
             def render_all(alpha=0.5, overlay=False, primary=0):
                 for i, (c, img) in enumerate(zip(canvases, pil_images)):
                     w = max(1, c.winfo_width() or 320)
                     h = max(1, c.winfo_height() or 240)
+                    c.delete('all')
                     if overlay and i != primary and len(pil_images) > primary:
                         base = pil_images[primary].resize((w, h), Image.LANCZOS)
                         top = img.resize((w, h), Image.LANCZOS)
@@ -2729,15 +3194,16 @@ class PolarizationGUI(tk.Tk):
                     else:
                         tkimg = ImageTk.PhotoImage(img.resize((w, h), Image.LANCZOS))
                     c.image = tkimg
-                    c.delete('all')
                     c.create_image(0, 0, anchor=tk.NW, image=tkimg)
-                    c.image = tkimg  # This line is necessary to prevent garbage collection
+                    if i == selected_index:
+                        c.create_rectangle(2, 2, w - 3, h - 3, outline='#ffd700', width=3)
+                        c.create_text(10, 10, anchor='nw', text='Selected', fill='#ffd700', font=('Arial', 10, 'bold'))
 
             controls_frame = tk.Frame(win)
             controls_frame.pack(fill=tk.X, padx=6, pady=6)
 
             overlay_var = tk.BooleanVar(value=False)
-            primary_idx = tk.IntVar(value=0)
+            primary_idx = tk.IntVar(value=selected_index)
             alpha_var = tk.DoubleVar(value=0.5)
 
             def toggle_overlay():
@@ -2759,7 +3225,6 @@ class PolarizationGUI(tk.Tk):
             tk.Button(controls_frame, text='Prev', command=prev_primary).pack(side=tk.LEFT, padx=6)
             tk.Button(controls_frame, text='Next', command=next_primary).pack(side=tk.LEFT, padx=6)
 
-            # Replace the open_in_single function with this:
             def open_in_single():
                 idx = primary_idx.get()
                 if idx < len(file_paths):
