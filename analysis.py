@@ -359,12 +359,18 @@ class PolarizationProcessor:
         self.batch_results = []
 
         x, y, w, h = self.batch_roi
+        reference_height, reference_width = self.batch_first_img.shape[:2]
+        roi_bounds = [
+            x / reference_width,
+            (x + w) / reference_width,
+            y / reference_height,
+            (y + h) / reference_height,
+        ]
         for file_path, params in zip(self.batch_files, self.batch_params):
             img = cv2.imread(file_path, cv2.IMREAD_GRAYSCALE)
             if img is None:
                 continue
-            c_bounds = [x / img.shape[1], (x + w) / img.shape[1], y / img.shape[0], (y + h) / img.shape[0]]
-            pol_angles = polarsens_to_cropped_pol_angles(img, c_bounds)
+            pol_angles = polarsens_to_cropped_pol_angles(img, roi_bounds)
 
             if pol_type == 'linear':
                 if mode == 'mean':
@@ -403,7 +409,12 @@ class PolarizationProcessor:
                 dolp_std = float(np.std(DoCP_img)) if isinstance(DoCP_img, np.ndarray) else 0.0
                 aolp_std = 0.0
 
-            roi_img = img[int(y):int(y+h), int(x):int(x+w)]
+            image_height, image_width = img.shape[:2]
+            roi_x1 = int(roi_bounds[0] * image_width)
+            roi_x2 = int(roi_bounds[1] * image_width)
+            roi_y1 = int(roi_bounds[2] * image_height)
+            roi_y2 = int(roi_bounds[3] * image_height)
+            roi_img = img[roi_y1:roi_y2, roi_x1:roi_x2]
             oversat, undersat = hf.sat_pct(roi_img)
 
             self.batch_results.append({

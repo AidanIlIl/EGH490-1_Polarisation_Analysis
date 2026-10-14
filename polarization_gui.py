@@ -80,6 +80,7 @@ class PolarizationGUI(tk.Tk):
         tk.Button(self.page_buttons_frame, text="Batch Folder", command=self.show_batch_page).pack(side=tk.LEFT, padx=4)
         tk.Button(self.page_buttons_frame, text="Batch Compare", command=self.show_compare_page).pack(side=tk.LEFT, padx=4)
         tk.Button(self.page_buttons_frame, text="Triple Compare", command=self.show_triple_compare_page).pack(side=tk.LEFT, padx=4)
+        tk.Button(self.page_buttons_frame, text="Bulk Convert", command=self.show_bulk_page).pack(side=tk.LEFT, padx=4)
 
         self.main_frame = tk.Frame(self)
         self.main_frame.pack(fill=tk.BOTH, expand=True)
@@ -88,6 +89,15 @@ class PolarizationGUI(tk.Tk):
         self.page2_frame = tk.Frame(self.main_frame)
         self.page3_frame = tk.Frame(self.main_frame)
         self.page4_frame = tk.Frame(self.main_frame)
+        self.page5_frame = tk.Frame(self.main_frame)
+
+        self.bulk_processors = []
+        self.bulk_roi_start = None
+        self.bulk_roi_rect = None
+        self.bulk_processor_image = None
+        self.bulk_roi_bounds = None
+        self.bulk_results_ready = False
+        self.bulk_calculated_config = None
 
         self.status_label = tk.Label(self, text="Load an image to start", anchor="w")
         self.status_label.pack(fill=tk.X, padx=8, pady=4)
@@ -96,6 +106,7 @@ class PolarizationGUI(tk.Tk):
         self._create_batch_page()
         self._create_compare_page()
         self._create_triple_compare_page()
+        self._create_bulk_page()
 
         self.show_single_page()
 
@@ -341,6 +352,39 @@ class PolarizationGUI(tk.Tk):
         self.batch_plot_figures = {}
         self.batch_plot_data = {}
 
+    def _create_bulk_page(self):
+        self.bulk_left_frame = tk.Frame(self.page5_frame)
+        self.bulk_left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=8)
+
+        self.bulk_grid_frame = tk.Frame(self.page5_frame)
+        self.bulk_grid_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=8, pady=8)
+        self.bulk_grid_frame.grid_rowconfigure(0, weight=1)
+        self.bulk_grid_frame.grid_columnconfigure(0, weight=1)
+
+        tk.Label(self.bulk_left_frame, text="Datasets (maximum 15):").pack(anchor="w", pady=(0, 4))
+        self.bulk_dataset_list = tk.Listbox(self.bulk_left_frame, width=38, height=12, selectmode=tk.SINGLE)
+        self.bulk_dataset_list.pack(fill=tk.X, pady=4)
+        tk.Button(self.bulk_left_frame, text="Add Dataset Folder", command=self.add_bulk_folder).pack(fill=tk.X, pady=4)
+        tk.Button(self.bulk_left_frame, text="Remove Selected", command=self.remove_bulk_folder).pack(fill=tk.X, pady=4)
+
+        self.bulk_mode_var = tk.StringVar(value="mean")
+        tk.Label(self.bulk_left_frame, text="Monolithic mode:").pack(pady=(12, 2), anchor="w")
+        tk.OptionMenu(self.bulk_left_frame, self.bulk_mode_var, "mean", "median", "stokes_mean").pack(fill=tk.X, pady=2)
+
+        self.bulk_pol_var = tk.StringVar(value="linear")
+        tk.Label(self.bulk_left_frame, text="Polarization Type:").pack(pady=(12, 2), anchor="w")
+        tk.Radiobutton(self.bulk_left_frame, text="Linear", variable=self.bulk_pol_var, value="linear").pack(anchor="w")
+        tk.Radiobutton(self.bulk_left_frame, text="Circular", variable=self.bulk_pol_var, value="circular").pack(anchor="w")
+
+        tk.Button(self.bulk_left_frame, text="Calculate All Datasets", command=self.calculate_bulk).pack(fill=tk.X, pady=(12, 4))
+        tk.Button(self.bulk_left_frame, text="Export Combined CSV", command=self.export_bulk_csv).pack(fill=tk.X, pady=4)
+        self.bulk_canvas = tk.Canvas(self.bulk_grid_frame, bg="black")
+        self.bulk_canvas.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+        self.bulk_canvas.bind('<Configure>', lambda event: self.resize_bulk_image())
+        self.bulk_canvas.bind('<ButtonPress-1>', self.bulk_on_mouse_press)
+        self.bulk_canvas.bind('<B1-Motion>', self.bulk_on_mouse_drag)
+        self.bulk_canvas.bind('<ButtonRelease-1>', self.bulk_on_mouse_release)
+
     def _create_compare_page(self):
         self.compare_left_frame = tk.Frame(self.page3_frame)
         self.compare_left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=8)
@@ -407,6 +451,7 @@ class PolarizationGUI(tk.Tk):
         self.page2_frame.pack_forget()
         self.page3_frame.pack_forget()
         self.page4_frame.pack_forget()
+        self.page5_frame.pack_forget()
         self.page1_frame.pack(fill=tk.BOTH, expand=True)
         self.status_label.config(text="Single-image analysis page active")
 
@@ -415,6 +460,7 @@ class PolarizationGUI(tk.Tk):
         self.page1_frame.pack_forget()
         self.page3_frame.pack_forget()
         self.page4_frame.pack_forget()
+        self.page5_frame.pack_forget()
         self.page2_frame.pack(fill=tk.BOTH, expand=True)
         self.status_label.config(text="Batch folder analysis page active")
 
@@ -423,6 +469,7 @@ class PolarizationGUI(tk.Tk):
         self.page1_frame.pack_forget()
         self.page2_frame.pack_forget()
         self.page4_frame.pack_forget()
+        self.page5_frame.pack_forget()
         self.page3_frame.pack(fill=tk.BOTH, expand=True)
         self.status_label.config(text="Batch comparison page active")
 
@@ -431,8 +478,19 @@ class PolarizationGUI(tk.Tk):
         self.page1_frame.pack_forget()
         self.page2_frame.pack_forget()
         self.page3_frame.pack_forget()
+        self.page5_frame.pack_forget()
         self.page4_frame.pack(fill=tk.BOTH, expand=True)
         self.status_label.config(text="Triple comparison page active")
+
+    def show_bulk_page(self):
+        self.page_active = 'bulk'
+        self.page1_frame.pack_forget()
+        self.page2_frame.pack_forget()
+        self.page3_frame.pack_forget()
+        self.page4_frame.pack_forget()
+        self.page5_frame.pack(fill=tk.BOTH, expand=True)
+        self.resize_bulk_image()
+        self.status_label.config(text="Bulk dataset conversion page active")
 
     def update_filter_params(self, value):
         if value == "Gaussian Blur":
@@ -553,6 +611,145 @@ class PolarizationGUI(tk.Tk):
             self.status_label.config(text="Folder loaded. Drag on the batch image to select ROI.")
         else:
             self.status_label.config(text="Failed to load folder or no valid images found.")
+
+    def add_bulk_folder(self):
+        if len(self.bulk_processors) >= 15:
+            self.status_label.config(text="A maximum of 15 datasets can be added.")
+            return
+        folder_path = filedialog.askdirectory()
+        if not folder_path:
+            return
+        if any(processor.batch_folder == folder_path for processor in self.bulk_processors):
+            self.status_label.config(text="That dataset folder is already in the list.")
+            return
+
+        processor = PolarizationProcessor()
+        if not processor.load_folder(folder_path):
+            self.status_label.config(text="Folder has no valid polarization images.")
+            return
+        self.bulk_processors.append(processor)
+        self.bulk_dataset_list.insert(tk.END, f"{os.path.basename(folder_path)} ({len(processor.batch_files)} images)")
+        self.bulk_results_ready = False
+        if self.bulk_roi_bounds is not None:
+            self._apply_bulk_roi(processor)
+        if len(self.bulk_processors) == 1:
+            self.bulk_processor_image = processor.batch_first_img.copy()
+            self.resize_bulk_image()
+            self.status_label.config(text="Dataset added. Drag on the preview to select the shared ROI.")
+        else:
+            self.status_label.config(text=f"Added dataset {len(self.bulk_processors)} of 15.")
+
+    def remove_bulk_folder(self):
+        selected = self.bulk_dataset_list.curselection()
+        if not selected:
+            self.status_label.config(text="Select a dataset to remove.")
+            return
+        index = selected[0]
+        del self.bulk_processors[index]
+        self.bulk_dataset_list.delete(index)
+        self.bulk_results_ready = False
+        if self.bulk_processors:
+            self.bulk_processor_image = self.bulk_processors[0].batch_first_img.copy()
+            if self.bulk_roi_bounds is not None:
+                for processor in self.bulk_processors:
+                    self._apply_bulk_roi(processor)
+            self.resize_bulk_image()
+        else:
+            self.bulk_processor_image = None
+            self.bulk_roi_bounds = None
+            self.bulk_roi_rect = None
+            self.bulk_canvas.delete("all")
+        self.status_label.config(text="Dataset removed.")
+
+    def _apply_bulk_roi(self, processor):
+        if self.bulk_roi_bounds is None:
+            processor.batch_set_roi(None)
+            return
+        image_height, image_width = processor.batch_first_img.shape[:2]
+        x_start, x_end, y_start, y_end = self.bulk_roi_bounds
+        processor.batch_set_roi((
+            x_start * image_width,
+            y_start * image_height,
+            (x_end - x_start) * image_width,
+            (y_end - y_start) * image_height,
+        ))
+
+    def calculate_bulk(self):
+        if not self.bulk_processors:
+            self.status_label.config(text="Add at least one dataset folder first.")
+            return
+        if self.bulk_roi_bounds is None:
+            self.status_label.config(text="Select a shared ROI on the preview image first.")
+            return
+        mode = self.bulk_mode_var.get()
+        pol_type = self.bulk_pol_var.get()
+        for processor in self.bulk_processors:
+            self._apply_bulk_roi(processor)
+            if not processor.batch_calculate(mode=mode, pol_type=pol_type):
+                self.status_label.config(text=f"Batch calculation failed for {processor.batch_folder}.")
+                self.bulk_results_ready = False
+                return
+        self.bulk_results_ready = True
+        self.bulk_calculated_config = (mode, pol_type, self.bulk_roi_bounds)
+        image_count = sum(len(processor.batch_results) for processor in self.bulk_processors)
+        self.status_label.config(text=f"Calculated {image_count} images across {len(self.bulk_processors)} datasets.")
+
+    def export_bulk_csv(self):
+        if not self.bulk_results_ready:
+            self.status_label.config(text="Calculate all datasets before exporting.")
+            return
+        if self.bulk_calculated_config != (
+            self.bulk_mode_var.get(), self.bulk_pol_var.get(), self.bulk_roi_bounds
+        ):
+            self.bulk_results_ready = False
+            self.status_label.config(text="Settings changed. Recalculate all datasets before exporting.")
+            return
+        file_path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
+        if not file_path:
+            return
+        pol_type = self.bulk_pol_var.get()
+        if pol_type == 'linear':
+            fields = ['DoLP', 'AoLP_deg', 'DoLP_std', 'AoLP_std', 'Saturation_pct']
+        else:
+            fields = ['DoCP', 'DoCP_std', 'Saturation_pct']
+        common_fields = ['file', 'az', 'ze', 'cze', 'exp', 'ISO', 'obs']
+        headers = ['az', 'ze']
+        for dataset_index in range(1, len(self.bulk_processors) + 1):
+            headers.extend(f'{field}_dataset{dataset_index}' for field in common_fields)
+            headers.extend(f'{field}_dataset{dataset_index}' for field in fields)
+        try:
+            with open(file_path, mode='w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(headers)
+                max_result_count = max(len(processor.batch_results) for processor in self.bulk_processors)
+                for result_index in range(max_result_count):
+                    first_results = self.bulk_processors[0].batch_results
+                    first_params = first_results[result_index]['params'] if result_index < len(first_results) else {}
+                    row = [first_params.get('az', ''), first_params.get('ze', '')]
+                    for processor in self.bulk_processors:
+                        if result_index >= len(processor.batch_results):
+                            row.extend([''] * (len(common_fields) + len(fields)))
+                            continue
+                        result = processor.batch_results[result_index]
+                        params = result['params']
+                        row.extend(params.get(field, '') for field in common_fields)
+                        if pol_type == 'linear':
+                            pol = result['pol']
+                            row.extend([
+                                float(pol[0]), float(np.rad2deg(pol[1])),
+                                float(result['dolp_std']), float(result['aolp_std']),
+                                float(result['saturation']),
+                            ])
+                        else:
+                            row.extend([
+                                float(result['pol'][0]), float(result['dolp_std']),
+                                float(result['saturation']),
+                            ])
+                    writer.writerow(row)
+        except OSError as error:
+            self.status_label.config(text=f"Failed to export combined CSV: {error}")
+            return
+        self.status_label.config(text=f"Combined CSV exported for {len(self.bulk_processors)} datasets.")
 
     def load_folder1(self):
         folder_path = filedialog.askdirectory()
@@ -757,6 +954,54 @@ class PolarizationGUI(tk.Tk):
         self.triple_processor3.batch_set_roi(image_roi)
         self.status_label.config(text=f"Triple comparison ROI selected: {tuple(map(int, image_roi))}")
 
+    def bulk_on_mouse_press(self, event):
+        if self.bulk_processor_image is None:
+            return
+        self.bulk_roi_start = (event.x, event.y)
+        if self.bulk_roi_rect:
+            self.bulk_canvas.delete(self.bulk_roi_rect)
+            self.bulk_roi_rect = None
+
+    def bulk_on_mouse_drag(self, event):
+        if self.bulk_roi_start is None:
+            return
+        if self.bulk_roi_rect:
+            self.bulk_canvas.delete(self.bulk_roi_rect)
+        x_start, y_start = self.bulk_roi_start
+        self.bulk_roi_rect = self.bulk_canvas.create_rectangle(
+            x_start, y_start, event.x, event.y, outline='red', width=2
+        )
+
+    def bulk_on_mouse_release(self, event):
+        if self.bulk_roi_start is None or self.bulk_processor_image is None:
+            return
+        x_start, y_start = self.bulk_roi_start
+        self.bulk_roi_start = None
+        image_roi = self._canvas_to_image_roi_generic(
+            self.bulk_canvas,
+            self.bulk_processor_image.shape[1],
+            self.bulk_processor_image.shape[0],
+            x_start, y_start, event.x, event.y,
+        )
+        x, y, width, height = image_roi
+        image_width = self.bulk_processor_image.shape[1]
+        image_height = self.bulk_processor_image.shape[0]
+        if width < 1 or height < 1:
+            self.bulk_roi_bounds = None
+            self.status_label.config(text="Select a larger ROI.")
+            return
+        self.bulk_roi_bounds = (
+            x / image_width,
+            (x + width) / image_width,
+            y / image_height,
+            (y + height) / image_height,
+        )
+        for processor in self.bulk_processors:
+            self._apply_bulk_roi(processor)
+        self.bulk_results_ready = False
+        self.resize_bulk_image()
+        self.status_label.config(text="Shared ROI selected for all datasets.")
+
     def _canvas_to_image_roi(self, x1, y1, x2, y2):
         img_width, img_height = self.processor.original_img.size
         return self._canvas_to_image_roi_generic(self.canvas, img_width, img_height, x1, y1, x2, y2)
@@ -810,6 +1055,37 @@ class PolarizationGUI(tk.Tk):
         self.batch_canvas.create_image((canvas_width - new_width) // 2, (canvas_height - new_height) // 2, anchor=tk.NW, image=self.batch_img_tk)
         self.batch_canvas.image = self.batch_img_tk
         self._batch_redraw_roi()
+
+    def resize_bulk_image(self):
+        self.bulk_canvas.delete("all")
+        self.bulk_canvas.update_idletasks()
+        if self.bulk_processor_image is None:
+            return
+        canvas_width = self.bulk_canvas.winfo_width()
+        canvas_height = self.bulk_canvas.winfo_height()
+        if canvas_width < 2 or canvas_height < 2:
+            return
+        image_height, image_width = self.bulk_processor_image.shape[:2]
+        scale = min(canvas_width / image_width, canvas_height / image_height)
+        new_width = int(image_width * scale)
+        new_height = int(image_height * scale)
+        resized_img = Image.fromarray(self.bulk_processor_image).resize((new_width, new_height), Image.LANCZOS)
+        self.bulk_img_tk = ImageTk.PhotoImage(resized_img)
+        self.bulk_canvas.create_image(
+            (canvas_width - new_width) // 2,
+            (canvas_height - new_height) // 2,
+            anchor=tk.NW,
+            image=self.bulk_img_tk,
+        )
+        self.bulk_canvas.image = self.bulk_img_tk
+        if self.bulk_roi_bounds is not None:
+            x_start, x_end, y_start, y_end = self.bulk_roi_bounds
+            self._redraw_roi_generic(
+                self.bulk_canvas,
+                (x_start * image_width, y_start * image_height,
+                 (x_end - x_start) * image_width, (y_end - y_start) * image_height),
+                image_width, image_height, 'bulk_roi_rect',
+            )
 
     def resize_compare_image(self):
         self.compare_canvas.delete("all")
@@ -2660,7 +2936,7 @@ class PolarizationGUI(tk.Tk):
             return
         csv_base = file_path[:-4] if file_path.lower().endswith('.csv') else file_path
         
-        # Export three separate CSV files for the three comparison pairs
+        # Export three separate CSV files for the three comparison pairs.
         pairs = ['P1-P2', 'P1-P3', 'P2-P3']
         for pair in pairs:
             with open(f"{csv_base}_{pair}.csv", mode='w', newline='') as csvfile:
@@ -2682,7 +2958,48 @@ class PolarizationGUI(tk.Tk):
                             params.get('file', ''), params['az'], params['ze'], params['cze'], params['exp'], params['ISO'], params['obs'],
                             row['docp_diff'], row['docp_std_diff'], row['sat_diff']
                         ])
-        self.status_label.config(text="Triple comparison results exported to CSV (3 files).")
+
+        # Export one combined CSV containing the original data from all three datasets.
+        dataset_results = [self.triple_results1, self.triple_results2, self.triple_results3]
+        if pol_type == 'linear':
+            value_fields = [
+                ('DoLP', lambda result: float(result['pol'][0])),
+                ('AoLP_deg', lambda result: float(np.rad2deg(result['pol'][1]))),
+                ('DoLP_std', lambda result: float(result['dolp_std'])),
+                ('AoLP_std', lambda result: float(result['aolp_std'])),
+                ('Saturation_pct', lambda result: float(result['saturation']))
+            ]
+        else:
+            value_fields = [
+                ('DoCP', lambda result: float(result['pol'][0])),
+                ('DoCP_std', lambda result: float(result['dolp_std'])),
+                ('Saturation_pct', lambda result: float(result['saturation']))
+            ]
+
+        common_fields = ['file', 'az', 'ze', 'cze', 'exp', 'ISO', 'obs']
+        headers = ['az', 'ze']
+        for dataset_index, result_group in enumerate(dataset_results, start=1):
+            for field in common_fields:
+                headers.append(f'{field}_dataset{dataset_index}')
+            for field_name, _ in value_fields:
+                headers.append(f'{field_name}_dataset{dataset_index}')
+
+        with open(f"{csv_base}_combined.csv", mode='w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(headers)
+            for index in range(len(self.triple_results['P1-P2'])):
+                combined_row = [
+                    self.triple_results1[index]['params']['az'],
+                    self.triple_results1[index]['params']['ze'],
+                ]
+                for dataset_index, result_group in enumerate(dataset_results, start=1):
+                    params = result_group[index]['params']
+                    combined_row.extend(params.get(field, '') for field in common_fields)
+                    for field_name, getter in value_fields:
+                        combined_row.append(getter(result_group[index]))
+                writer.writerow(combined_row)
+
+        self.status_label.config(text="Triple comparison results exported to CSV (3 pair files + combined dataset file).")
 
     def export_batch_csv(self):
         if not hasattr(self.processor, 'batch_results') or not self.processor.batch_results:
